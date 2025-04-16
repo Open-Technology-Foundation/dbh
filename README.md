@@ -2,6 +2,20 @@
 
 A fast and intuitive MySQL database explorer with command-line navigation, direct SQL, and shell access.
 
+## Description
+
+`dbh` is a MySQL database helper utility designed to streamline database interaction through a hierarchical command interface. The tool provides quick navigation of databases and tables, simplifies query construction, offers direct SQL execution, and maintains shell access—all while preserving context.
+
+Key aspects:
+- **Context-Aware Interface**: Maintains awareness of current database and table selections
+- **Command System**: Processes slash commands (`/databases`), shell commands (`!ls`), and direct SQL
+- **Persistent History**: Stores command history with arrow key navigation across sessions
+- **Security-Focused**: Prevents SQL injection and handles credentials securely
+- **Query Builder**: Interactively construct SQL queries with intuitive commands
+- **Shell Integration**: Run system commands while maintaining database context
+
+The tool serves as a productivity enhancer for database administrators and developers who need to quickly explore, query, and manage MySQL databases without the overhead of remembering complex SQL syntax.
+
 ## Features
 
 - **Interactive Navigation** - Browse databases and tables with menu-driven selection

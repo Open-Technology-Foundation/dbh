@@ -11,12 +11,22 @@ set -eEuo pipefail +o histexpand
 shopt -s extglob globstar checkwinsize nocasematch # nocasematch for command parsing
 
 # --- History Setup ---
-unset HISTFILE # Use default ~/.bash_history or respect HISTFILE if already set
 HISTSIZE=1000
 HISTFILESIZE=2000
-shopt -s histappend # Append to history, don't overwrite
+shopt -s histappend
 
-readonly VERSION='3.3.6' # Comprehensive documentation update with command categories alignment
+# Setup history files
+DBH_CONFIG_DIR="$HOME/.config/dbh"
+DBH_HISTORY_FILE="$DBH_CONFIG_DIR/history"
+DBH_READLINE_HISTORY="$DBH_CONFIG_DIR/readline_history"
+HISTFILE="$DBH_READLINE_HISTORY"  # For arrow key navigation
+
+# Create config directory if needed
+if [[ ! -d "$DBH_CONFIG_DIR" ]]; then
+  mkdir -p "$DBH_CONFIG_DIR" || warn "Could not create directory: $DBH_CONFIG_DIR"
+fi
+
+readonly VERSION='3.6.0' # Arrow key history navigation
 
 # Get script path and extract directory/program name
 PRG0=$(readlink -en -- "$0") || { echo "ERROR: Could not resolve script path"; exit 1; }
@@ -179,6 +189,15 @@ handle_shell_command() {
   if [[ -n "$cmd" ]]; then
     # Execute specific command
     bash -c "$cmd"
+    
+    local exit_code=$?
+    
+    # Provide a prompt to continue after viewing output
+    if [[ -t 0 && -t 1 ]]; then  # Only if both stdin and stdout are terminals
+      echo
+      read -p "Press Enter to continue... " -n 1 -s
+      echo
+    fi
   else
     # Launch interactive shell
     if [[ -n "$SHELL" ]]; then
@@ -186,13 +205,12 @@ handle_shell_command() {
     else
       bash
     fi
+    
+    local exit_code=$?
   fi
-  
-  local exit_code=$?
   
   # Restore terminal state
   stty "$saved_stty" 2>/dev/null || true
-  clear
   
   if (( exit_code == 0 )); then
     info "Shell session completed. Returned to $PRG."
@@ -214,20 +232,83 @@ declare -g WhereClause="" OrderClause="" OrderDirection="ASC" LimitClause="100"
 declare -g PromptPrefix="[dbh]"
 # History tracking for /history command
 declare -a CommandHistory=()
+
+# Load history from file
+load_history() {
+  CommandHistory=()
+  
+  local old_errexit
+  old_errexit="$(set +o | grep errexit)"
+  set +e
+  
+  history -c
+  
+  if [[ -r "$DBH_HISTORY_FILE" && -s "$DBH_HISTORY_FILE" ]]; then
+    local line
+    local count=0
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" ]] && continue
+      
+      CommandHistory+=("$line")
+      history -s "$line" 2>/dev/null || true
+      ((count++))
+    done < "$DBH_HISTORY_FILE" 2>/dev/null || true
+    
+    history -w "$HISTFILE" 2>/dev/null || true
+    
+    [[ $count -gt 0 && -t 1 ]] && info "Loaded $count history entries"
+  elif [ -t 1 ]; then
+    info "No history file found"
+  fi
+  
+  eval "$old_errexit"
+  return 0
+}
+
+# Save history to file
+save_history() {
+  local old_errexit
+  old_errexit="$(set +o | grep errexit)"
+  set +e
+  
+  if [[ -d "$DBH_CONFIG_DIR" ]]; then
+    [[ ${#CommandHistory[@]} -eq 0 ]] && { eval "$old_errexit"; return 0; }
+    
+    local result=0
+    printf "%s\n" "${CommandHistory[@]}" 2>/dev/null > "$DBH_HISTORY_FILE" || result=$?
+    
+    if [[ $result -eq 0 ]]; then
+      chmod 600 "$DBH_HISTORY_FILE" 2>/dev/null || true
+      if [[ -f "$HISTFILE" ]]; then
+        chmod 600 "$HISTFILE" 2>/dev/null || true
+      fi
+      
+      [ -t 1 ] && info "Saved ${#CommandHistory[@]} history entries"
+    fi
+  elif [ -t 2 ]; then
+    warn "Could not save history: Directory $DBH_CONFIG_DIR missing"
+  fi
+  
+  eval "$old_errexit"
+  return 0
+}
 # --- End Globals ---
 
 # --- Cleanup ---
 xcleanup() {
+  set +e
+  
   local -i exitcode=${1:-$?}
   
-  # Restore cursor if running in terminal
   [[ -t 0 ]] && printf '\e[?25h' >&2
+  save_history
   
-  # Clean up any remaining temp files with more secure pattern
   find "${TMPDIR:-/tmp}" -maxdepth 1 -type f -name "${PRG}.*.????????" -user "$(id -u)" -delete 2>/dev/null || true
   
-  # Normal exit
-  exit "$exitcode"
+  [[ "$exitcode" -eq 0 || "$exitcode" -gt 128 ]] && exit "$exitcode"
+  
+  return 0
 }
 
 # Set trap for cleanup on exit
@@ -310,8 +391,9 @@ Shell Access:
   !                 Interactive shell (returns to dbh)
   !command          Execute shell command
   !shell command    Alternative syntax
+  ↑/↓               Use arrow keys to navigate command history
   !number           Repeat command from history by number
-  /history [n]      Show command history (last n entries)
+  /history [n]      Show command history (last n entries, persistent across sessions)
 
 Examples:
   $PRG mydb users # Start in mydb.users
@@ -522,8 +604,9 @@ handle_cmd_help() {
   info "  !                 Interactive shell (returns to dbh)"
   info "  !command          Execute shell command"
   info "  !shell command    Alternative syntax"
+  info "  ↑/↓               Use arrow keys to navigate command history"
   info "  !number           Repeat command from history by number"
-  info "  /history [n]      Show command history (last n entries)"
+  info "  /history [n]      Show command history (last n entries, persistent across sessions)"
   
   info "---------------------------------------------------------------"
   return 0
@@ -1316,25 +1399,35 @@ handle_cmd_history() {
     warn "Invalid count: '$1'. Using default ($count)."
   fi
   
+  # Display history file info
+  if [[ -r "$DBH_HISTORY_FILE" ]]; then
+    info "Command history from $DBH_HISTORY_FILE (total entries: ${#CommandHistory[@]}):"
+  else
+    info "Command history (total entries: ${#CommandHistory[@]}):"
+  fi
+  
   # Use the built-in history command if no CommandHistory array
   if [[ ${#CommandHistory[@]} -eq 0 ]]; then
-    info "Command history (last $count):"
-    # Use built-in bash history command
+    info "No command history found."
+    # Use built-in bash history command as fallback
     local hist_cmd="history $count"
     # Execute the history command
     eval "$hist_cmd"
   else
     # Use our tracked history
-    info "Command history (last $count):"
+    # Calculate start position
     local start=$((${#CommandHistory[@]} > count ? ${#CommandHistory[@]} - count : 0))
+    # Show last count entries (or all if fewer)
     for ((i=start; i<${#CommandHistory[@]}; i++)); do
       printf "%3d  %s\n" $((i+1)) "${CommandHistory[$i]}"
     done
   fi
   
-  # Provide help for reusing commands
-  info "To repeat a command, use '!number' where number is the command's history number."
-  info "Example: !5 will execute the 5th command in history."
+  echo
+  info "To navigate history:"
+  info "- Use UP/DOWN arrow keys to scroll through commands"
+  info "- Use !N to execute command number N (e.g., !5)"
+  info "History is persistent across sessions"
   
   return 0
 }
@@ -2982,6 +3075,9 @@ main() {
   if (( init_check_status != 0 )); then die 1 "Initial connection failed using profile '$PROFILE'. Check errors."; fi
   (( VERBOSE > 0 )) && success "Connection successful." && info "Using profile '$PROFILE'"
 
+  # --- Load command history ---
+  load_history
+
   # --- Initial Context Setup ---
   if [[ -n "$Database" ]]; then
       # Use || true to prevent exit if initial context setting fails
@@ -3003,13 +3099,28 @@ main() {
   # --- Interactive Mode Loop ---
   info "Starting interactive mode. Type '/help' for commands, '/q' to quit."
   local input raw_cmd cmd args
+  
+  # Detect non-interactive mode
+  if ! [ -t 0 ]; then
+    info "Detected non-interactive mode (input from pipe)"
+  fi
+  
+  # Start the interactive loop
   while true; do
-    # Check if read returns non-zero (EOF)
-    if ! read -e -p "$PromptPrefix> " input; then info "EOF detected. Exiting."; echo; break; fi
-    input=$(trim "$input"); [[ -z "$input" ]] && continue
-    history -s "$input"
-    # Store command in our history array
-    CommandHistory+=("$input")
+      # Check if read returns non-zero (EOF)
+      if ! read -e -p "$PromptPrefix> " input; then 
+        info "EOF detected. Exiting."; 
+        echo; 
+        break
+      fi
+      input=$(trim "$input"); [[ -z "$input" ]] && continue
+      
+      # Add to history (skip exit/history commands)
+      if [[ "$input" != "/history" && "$input" != "/q" && "$input" != "/quit" && "$input" != "/exit" ]]; then
+        CommandHistory+=("$input")
+        history -s "$input" 2>/dev/null || true
+        history -w "$HISTFILE" 2>/dev/null || true
+      fi
     # First check for history recall with !number
     if [[ "$input" =~ ^![0-9]+$ ]]; then
       # Extract the history number
