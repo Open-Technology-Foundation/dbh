@@ -1,0 +1,19 @@
+# DBH Configuration File Example
+# Copy this to ~/.config/dbh/config and customize as needed
+
+# Default MySQL configuration file
+DEFAULT_PROFILE=~/.mylocalhost.cnf
+
+# Default database to connect to on startup (if not specified on command line)
+# DEFAULT_DATABASE=mysql
+
+# Default limit for SELECT queries (default: 100)
+DEFAULT_LIMIT=100
+
+# Maximum number of history entries to store (default: 1000)
+MAX_HISTORY=1000
+
+# Pager program (default: less)
+# PAGER=less -S
+
+# Add more configuration options as needed

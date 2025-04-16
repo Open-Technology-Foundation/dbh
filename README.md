@@ -24,6 +24,8 @@ The tool serves as a productivity enhancer for database administrators and devel
 - **Query Building** - Construct SELECT queries interactively with intuitive commands
 - **Rich Output** - Boxed tabular display with horizontal scrolling for wide tables
 - **Detailed Structure** - View table structures, columns, indexes, and status
+- **Configuration** - Customize behavior through a user configuration file
+- **History Management** - Persistent command history with arrow key navigation
 
 ## Installation
 
@@ -85,6 +87,8 @@ Usage:
 
 **Other:**
 - `/sql <query>` - Execute arbitrary SQL
+- `/config` - Manage configuration settings
+- `/history` - Show command history
 - `!` - Launch interactive shell
 - `!command` - Execute shell command
 - `/help` - Show help
@@ -112,6 +116,12 @@ dbh mydb users
 # Using shell commands
 [dbh:mydb:users]> ! ls -la
 [dbh:mydb:users]> ! grep -r "password" /etc/mysql/
+
+# Configuration management
+[dbh]> /config create  # Create default configuration file
+[dbh]> /config show    # Show current configuration
+[dbh]> /config edit    # Open configuration in editor
+[dbh]> /config reload  # Reload after manual changes
 ```
 
 ## Options
