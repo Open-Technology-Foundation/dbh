@@ -16,7 +16,7 @@ HISTSIZE=1000
 HISTFILESIZE=2000
 shopt -s histappend # Append to history, don't overwrite
 
-readonly VERSION='3.0.7' # Security fixes and code improvements
+readonly VERSION='3.3.6' # Comprehensive documentation update with command categories alignment
 
 # Get script path and extract directory/program name
 PRG0=$(readlink -en -- "$0") || { echo "ERROR: Could not resolve script path"; exit 1; }
@@ -212,6 +212,8 @@ declare -xg PROFILE='' Database='' DataTable=''
 declare -ga SelectedColumns=('*') # Array of column names, default '*'
 declare -g WhereClause="" OrderClause="" OrderDirection="ASC" LimitClause="100"
 declare -g PromptPrefix="[dbh]"
+# History tracking for /history command
+declare -a CommandHistory=()
 # --- End Globals ---
 
 # --- Cleanup ---
@@ -237,10 +239,11 @@ usage() {
 $PRG v$VERSION - Interactive MySQL client with slash commands, shell access, and direct SQL
 
 Usage:
-  $PRG [Options] [database [table]]
+  $PRG [Options] [database [table [command]]]
 
   database  Optional: Initial database to connect to
   table     Optional: Initial table to select
+  command   Optional: Initial command to execute
 
 Options:
   -p, --profile PROFILE  MySQL config file (Default: $Profile_Default)
@@ -253,13 +256,14 @@ Command Types:
   /command          Slash commands for database operations
   !command          Shell commands (!alone for interactive shell)
   SQL               Direct SQL when not starting with / or !
+  !number           Repeat command from history by number
 
 Database Navigation:
   /help             Show available commands
   /databases        List & select database via menu
   /database <db>    Directly select database
   /tables           List & select table via menu
-  /table <name>     Directly select table
+  /table <name>        Directly select table
   /.. | /0 | /back  Go back one level (Table->DB->Exit)
   /q | /quit | /exit Exit the shell
 
@@ -278,6 +282,27 @@ Table Operations:
   /status           Show table status
   /create           Show CREATE statement
   /count            Show row count
+  /sample [n]       Show n sample rows (default: 10)
+  /primary-key      Show primary key columns
+  /indexes          Show all indexes
+  /foreign-keys     Show foreign key relationships
+  /find <text>      Search for text in all columns
+  /backup [file]    Backup table to SQL file
+
+Database Operations:
+  /schema [v]       Show database schema with relationships
+  /charset          Show character set information
+  /engines          List available storage engines
+  /backup [file]    Backup current database to SQL file
+
+Administration:
+  /whoami           Show current MySQL user and privileges
+  /whois [user]     Show information about a specific MySQL user
+  /users            Show MySQL users and privileges
+  /processes        Show active MySQL processes
+  /variables [filter] Display MySQL system variables
+  /stats            Show database/table statistics
+  /export [file]    Export query results to file (CSV/SQL/JSON)
   /sql <SQL>        Execute arbitrary SQL
   /prompt           Open MySQL prompt
 
@@ -285,6 +310,8 @@ Shell Access:
   !                 Interactive shell (returns to dbh)
   !command          Execute shell command
   !shell command    Alternative syntax
+  !number           Repeat command from history by number
+  /history [n]      Show command history (last n entries)
 
 Examples:
   $PRG mydb users # Start in mydb.users
@@ -410,29 +437,37 @@ handle_cmd_help() {
   info " Context: $PromptPrefix"
   
   # Command Type Summary
+  info
   info " Command Types:"
-  info "  /command          Database operations"
+  info "  /command          Slash commands for database operations"
   info "  !command          Shell commands (!alone for interactive shell)"
-  info "  SQL               Direct SQL input (when not starting with / or !)"
+  info "  SQL               Direct SQL when not starting with / or !"
+  info "  !number           Repeat command from history by number"
   
   # Database Navigation
+  info
   info " Database Navigation:"
-  info "  /databases        List & select database"
-  info "  /database <db>    Select database directly"
-  info "  /tables           List & select table"
-  info "  /table <tbl>      Select table directly"
+  info "  /help             Show available commands"
+  info "  /databases        List & select database via menu"
+  info "  /database <db>    Directly select database"
+  info "  /tables           List & select table via menu"
+  info "  /table <n>        Directly select table"
+  info "  /.. | /0 | /back  Go back one level (Table->DB->Exit)"
+  info "  /q | /quit | /exit Exit the shell"
   
   # Query Building
+  info
   info " Query Building:"
   info "  /columns [cols]   Set columns (Current: $(IFS=,; echo "${SelectedColumns[*]}"))"
   info "  /where [clause]   Set WHERE clause (Current: ${WhereClause:-<None>})"
   info "  /order [cols]     Set ORDER BY (Current: ${OrderClause:-<None>})"
   info "  /asc | /desc      Set direction (Current: $OrderDirection)"
   info "  /limit [num]      Set LIMIT (Current: ${LimitClause:-<None>})"
-  info "  /select           Execute query with current settings"
-  info "  /state            Show current query state"
+  info "  /select           Execute query with current state"
+  info "  /state            Show query state"
   
   # Table Operations
+  info
   info " Table Operations:"
   if [[ -n "$DataTable" ]]; then
     info "  /describe         Structure of '$DataTable'"
@@ -440,33 +475,55 @@ handle_cmd_help() {
     info "  /status           Status for '$DataTable'"
     info "  /create           CREATE TABLE statement"
     info "  /count            Row count"
+    info "  /sample [n]       Show n sample rows (default: 10)"
+    info "  /primary-key      Show primary key columns"
+    info "  /indexes          Show all indexes"
+    info "  /foreign-keys     Show foreign key relationships"
+    info "  /find <text>      Search for text in all columns"
+    info "  /backup [file]    Backup table to SQL file"
   else
-    info "  /describe         Table structure (requires table)"
-    info "  /structure [v]    Detailed columns (requires table)"
-    info "  /status           Table status (requires table)"
-    info "  /create           CREATE TABLE statement (requires table)"
-    info "  /count            Row count (requires table)"
+    info "  /describe         Show table structure (requires table)"
+    info "  /structure [v]    Detailed column info (v=vertical) (requires table)"
+    info "  /status           Show table status (requires table)"
+    info "  /create           Show CREATE statement (requires table)"
+    info "  /count            Show row count (requires table)"
+    info "  /sample [n]       Show n sample rows (requires table)"
+    info "  /primary-key      Show primary key columns (requires table)"
+    info "  /indexes          Show all indexes (requires table)"
+    info "  /foreign-keys     Show foreign key relationships (requires table)"
+    info "  /find <text>      Search for text in all columns (requires table)"
+    info "  /backup [file]    Backup table to SQL file (requires table)"
   fi
   
-  # General Operations
-  info " General & SQL:"
-  if [[ -n "$Database" ]]; then
-    info "  /sql <SQL>        Execute SQL in '$Database'"
-    info "  /prompt           MySQL prompt for '$Database'"
-    info "  <SQL>             Direct SQL (no prefix needed)"
-  else
-    info "  /sql <SQL>        Execute SQL (requires database)"
-    info "  /prompt           MySQL prompt (requires database)"
-    info "  <SQL>             Direct SQL (requires database)"
-  fi
+  # Database Operations
+  info
+  info " Database Operations:"
+  info "  /schema [v]       Show database schema with relationships"
+  info "  /charset          Show character set information"
+  info "  /engines          List available storage engines"
+  info "  /backup [file]    Backup current database to SQL file"
   
-  # Shell and Navigation
-  info " Shell & Navigation:"
-  info "  !                 Interactive shell"
+  # Administration
+  info
+  info " Administration:"
+  info "  /whoami           Show current MySQL user and privileges"
+  info "  /whois [user]     Show information about a specific MySQL user"
+  info "  /users            Show MySQL users and privileges"
+  info "  /processes        Show active MySQL processes"
+  info "  /variables [filter] Display MySQL system variables"
+  info "  /stats            Show database/table statistics"
+  info "  /export [file]    Export query results to file (CSV/SQL/JSON)"
+  info "  /sql <SQL>        Execute arbitrary SQL"
+  info "  /prompt           Open MySQL prompt"
+  
+  # Shell Access
+  info
+  info " Shell Access:"
+  info "  !                 Interactive shell (returns to dbh)"
   info "  !command          Execute shell command"
-  info "  /.. | /0 | /back  Go back one level"
-  info "  /q | /quit | /exit Exit $PRG"
-  info "  /help             Show this help"
+  info "  !shell command    Alternative syntax"
+  info "  !number           Repeat command from history by number"
+  info "  /history [n]      Show command history (last n entries)"
   
   info "---------------------------------------------------------------"
   return 0
@@ -691,7 +748,7 @@ handle_cmd_columns() {
   available_columns=("* (All columns)" "${available_columns[@]}")
   
   # Display selection menu
-  local PS3 col selected_indices=() selected_columns=()
+  local PS3 col selected_indices=()
   PS3="$PromptPrefix Select columns (multiple allowed, 0=done, q=cancel, ?=help): "
   
   echo "Current selection: $(IFS=,; echo "${SelectedColumns[*]}")"
@@ -1058,6 +1115,1721 @@ handle_cmd_prompt() {
   stty sane; clear; info "Returned to $PRG. Current context: $PromptPrefix"; bind '"\e[0n": redraw-current-line'; printf '\e[0n' > /dev/tty; return 0
 }
 
+# Display sample rows from the current table
+handle_cmd_sample() {
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+
+  local num_rows="10" # Default number of rows
+  local quoted_table
+  quoted_table=$(quote_ident "$DataTable")
+  
+  # Parse argument for number of rows if provided
+  if [[ -n "$1" && "$1" =~ ^[0-9]+$ ]]; then
+    num_rows="$1"
+  elif [[ -n "$1" && ! "$1" =~ ^[0-9]+$ ]]; then
+    warn "Invalid number of rows: '$1'. Using default ($num_rows)."
+  fi
+  
+  info "Showing $num_rows sample rows from '$Database.$DataTable':"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    {
+      # Use table format with paging through less
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        --table -e "SELECT * FROM $quoted_table LIMIT $num_rows;" | less -RS
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    }
+  else
+    # Use table format without paging if less isn't available
+    mysql_run_display "$Database" --table -e "SELECT * FROM $quoted_table LIMIT $num_rows;"
+  fi
+  
+  return $?
+}
+
+# Show primary key information for the current table
+handle_cmd_primary_key() {
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+  
+  info "Primary key for '$Database.$DataTable':"
+  
+  local query
+  query="SELECT k.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE, k.CONSTRAINT_NAME 
+         FROM information_schema.TABLE_CONSTRAINTS tc 
+         JOIN information_schema.KEY_COLUMN_USAGE k USING(CONSTRAINT_NAME, TABLE_SCHEMA, TABLE_NAME) 
+         JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA = k.TABLE_SCHEMA 
+                                          AND c.TABLE_NAME = k.TABLE_NAME 
+                                          AND c.COLUMN_NAME = k.COLUMN_NAME
+         WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' 
+           AND tc.TABLE_SCHEMA = $(escape_sql_value "$Database") 
+           AND tc.TABLE_NAME = $(escape_sql_value "$DataTable")
+         ORDER BY k.ORDINAL_POSITION;"
+  
+  local result
+  result=$(mysql_exec "$Database" --table -e "$query")
+  local exit_code=$?
+  
+  if (( exit_code == 0 )); then
+    if [[ -z "$result" ]]; then
+      info "No primary key defined for table '$DataTable'."
+    else
+      echo "$result"
+    fi
+  fi
+  
+  return $exit_code
+}
+
+# Show all indexes for the current table
+handle_cmd_indexes() {
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+  
+  info "Indexes for '$Database.$DataTable':"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  local quoted_table
+  quoted_table=$(quote_ident "$DataTable")
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    {
+      # Use table format with paging through less
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        --table -e "SHOW INDEX FROM $quoted_table;" | less -RS
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    }
+  else
+    # Direct output without pager
+    mysql_exec "$Database" --table -e "SHOW INDEX FROM $quoted_table;"
+  fi
+  
+  return $?
+}
+
+# Search table data for specific text
+handle_cmd_find() {
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+  
+  local search_text="$*"
+  if [[ -z "$search_text" ]]; then
+    read -e -p "Enter text to search for: " search_text
+    if [[ -z "$search_text" ]]; then
+      error "No search text provided."
+      return 1
+    fi
+  fi
+  
+  info "Searching for '$search_text' in '$Database.$DataTable':"
+  
+  # Get column list from the table for building query
+  local column_list
+  column_list=$(mysql_exec "$Database" -Nse "SHOW COLUMNS FROM $(quote_ident "$DataTable") WHERE 1;") || { 
+    error "Could not retrieve columns for '$Database.$DataTable'."
+    return 1
+  }
+  
+  # Extract just the column names (first column of output)
+  local columns
+  mapfile -t columns < <(echo "$column_list" | awk '{print $1}')
+  
+  if [[ ${#columns[@]} -eq 0 ]]; then
+    error "No columns found in table '$DataTable'."
+    return 1
+  fi
+  
+  # Build LIKE conditions for each column
+  local conditions=()
+  local col
+  local quoted_col
+  for col in "${columns[@]}"; do
+    quoted_col=$(quote_ident "$col")
+    # Only apply LIKE to string-like columns (VARCHAR, TEXT, etc.)
+    # For non-string columns, use string conversion
+    conditions+=("CAST($quoted_col AS CHAR) LIKE CONCAT('%', $(escape_sql_value "$search_text"), '%')")
+  done
+  
+  # Combine all conditions with OR
+  local where_clause
+  where_clause=$(IFS=" OR "; echo "${conditions[*]}")
+  
+  # Execute the search query
+  local query
+  query="SELECT * FROM $(quote_ident "$DataTable") WHERE $where_clause LIMIT 100;"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    {
+      # Use table format with paging through less
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        --table -e "$query" | less -RS
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    }
+  else
+    # Use table format without paging
+    mysql_run_display "$Database" --table -e "$query"
+  fi
+  
+  return $?
+}
+
+# Display command history
+handle_cmd_history() {
+  local count=20 # Default number of history items to show
+  
+  # Parse argument for number of items if provided
+  if [[ -n "$1" && "$1" =~ ^[0-9]+$ ]]; then
+    count="$1"
+  elif [[ -n "$1" && ! "$1" =~ ^[0-9]+$ ]]; then
+    warn "Invalid count: '$1'. Using default ($count)."
+  fi
+  
+  # Use the built-in history command if no CommandHistory array
+  if [[ ${#CommandHistory[@]} -eq 0 ]]; then
+    info "Command history (last $count):"
+    # Use built-in bash history command
+    local hist_cmd="history $count"
+    # Execute the history command
+    eval "$hist_cmd"
+  else
+    # Use our tracked history
+    info "Command history (last $count):"
+    local start=$((${#CommandHistory[@]} > count ? ${#CommandHistory[@]} - count : 0))
+    for ((i=start; i<${#CommandHistory[@]}; i++)); do
+      printf "%3d  %s\n" $((i+1)) "${CommandHistory[$i]}"
+    done
+  fi
+  
+  # Provide help for reusing commands
+  info "To repeat a command, use '!number' where number is the command's history number."
+  info "Example: !5 will execute the 5th command in history."
+  
+  return 0
+}
+
+# Show database schema with table relationships
+handle_cmd_schema() {
+  if [[ -z "$Database" ]]; then
+    error "No database selected. Use /database first."
+    return 1
+  fi
+  
+  local format="$1"
+  local vertical_format=0
+  
+  if [[ "$format" == "v" ]]; then
+    vertical_format=1
+  fi
+  
+  info "Database schema for '$Database':"
+  
+  # First, get a list of all tables
+  local tables_list
+  tables_list=$(mysql_exec "$Database" -Nse "SHOW TABLES;" | sort -i) || { 
+    error "Could not retrieve tables for '$Database'."
+    return 1
+  }
+  
+  if [[ -z "$tables_list" ]]; then
+    info "No tables found in '$Database'."
+    return 0
+  fi
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Build query to get foreign key relationships
+  local query
+  query="SELECT 
+           tc.TABLE_NAME as 'Table',
+           tc.CONSTRAINT_NAME as 'Constraint Name',
+           kcu.COLUMN_NAME as 'Column',
+           kcu.REFERENCED_TABLE_NAME as 'Referenced Table',
+           kcu.REFERENCED_COLUMN_NAME as 'Referenced Column'
+         FROM information_schema.TABLE_CONSTRAINTS tc
+         JOIN information_schema.KEY_COLUMN_USAGE kcu 
+           ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+           AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+         WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+         AND tc.TABLE_SCHEMA = $(escape_sql_value "$Database")
+         ORDER BY tc.TABLE_NAME, kcu.ORDINAL_POSITION;"
+  
+  # Execute with appropriate formatting and paging
+  if (( vertical_format )); then
+    # Vertical format
+    if (( use_pager )); then
+      local schema_file
+      schema_file=$(create_secure_tempfile "${PRG}.schema")
+      
+      {
+        # Introduction
+        echo "Foreign key relationships in database '$Database':"
+        echo "-------------------------------------------------"
+        echo
+        
+        # Execute the query with vertical format
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          -e "$query\G"
+      } > "$schema_file"
+      
+      # Use less directly on the file
+      less -RS "$schema_file"
+      
+      # Clean up
+      rm -f "$schema_file"
+      
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    else
+      # Direct output without pager
+      echo "Foreign key relationships in database '$Database':"
+      echo "-------------------------------------------------"
+      echo
+      mysql_exec "$Database" -e "$query\G"
+    fi
+  else
+    # Tabular format
+    if (( use_pager )); then
+      local schema_file
+      schema_file=$(create_secure_tempfile "${PRG}.schema")
+      
+      {
+        # Introduction
+        echo "Foreign key relationships in database '$Database':"
+        echo "-------------------------------------------------"
+        echo
+        
+        # Execute the query with table format
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query"
+      } > "$schema_file"
+      
+      # Use less directly on the file
+      less -RS "$schema_file"
+      
+      # Clean up
+      rm -f "$schema_file"
+      
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    else
+      # Direct output without pager
+      echo "Foreign key relationships in database '$Database':"
+      echo "-------------------------------------------------"
+      echo
+      mysql_exec "$Database" --table -e "$query"
+    fi
+  fi
+  
+  # Now show a summary of tables without foreign keys
+  local query_tables_without_fk
+  query_tables_without_fk="SELECT
+                             t.TABLE_NAME as 'Table Without Foreign Keys'
+                           FROM information_schema.TABLES t
+                           LEFT JOIN (
+                             SELECT DISTINCT tc.TABLE_NAME
+                             FROM information_schema.TABLE_CONSTRAINTS tc
+                             WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+                             AND tc.TABLE_SCHEMA = $(escape_sql_value "$Database")
+                           ) fk ON t.TABLE_NAME = fk.TABLE_NAME
+                           WHERE t.TABLE_SCHEMA = $(escape_sql_value "$Database")
+                           AND fk.TABLE_NAME IS NULL
+                           ORDER BY t.TABLE_NAME;"
+  
+  echo
+  echo "Tables without foreign key relationships:"
+  echo "----------------------------------------"
+  mysql_exec "$Database" --table -e "$query_tables_without_fk"
+  
+  return 0
+}
+
+# Show foreign key relationships for the current table
+handle_cmd_foreign_keys() {
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+  
+  info "Foreign key relationships for '$Database.$DataTable':"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Build query to find foreign keys in this table
+  local query_fk_out
+  query_fk_out="SELECT 
+                  kcu.CONSTRAINT_NAME as 'Constraint Name',
+                  kcu.COLUMN_NAME as 'Column',
+                  kcu.REFERENCED_TABLE_NAME as 'Referenced Table',
+                  kcu.REFERENCED_COLUMN_NAME as 'Referenced Column'
+                FROM information_schema.TABLE_CONSTRAINTS tc
+                JOIN information_schema.KEY_COLUMN_USAGE kcu 
+                  ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                  AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+                WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+                AND tc.TABLE_SCHEMA = $(escape_sql_value "$Database")
+                AND tc.TABLE_NAME = $(escape_sql_value "$DataTable")
+                ORDER BY kcu.ORDINAL_POSITION;"
+  
+  # Build query to find tables referencing this table
+  local query_fk_in
+  query_fk_in="SELECT 
+                 tc.TABLE_NAME as 'Referencing Table',
+                 kcu.COLUMN_NAME as 'Referencing Column',
+                 kcu.CONSTRAINT_NAME as 'Constraint Name',
+                 kcu.REFERENCED_COLUMN_NAME as 'Referenced Column'
+               FROM information_schema.TABLE_CONSTRAINTS tc
+               JOIN information_schema.KEY_COLUMN_USAGE kcu 
+                 ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                 AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+               WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+               AND tc.TABLE_SCHEMA = $(escape_sql_value "$Database")
+               AND kcu.REFERENCED_TABLE_NAME = $(escape_sql_value "$DataTable")
+               ORDER BY tc.TABLE_NAME, kcu.ORDINAL_POSITION;"
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local fk_file
+    fk_file=$(create_secure_tempfile "${PRG}.fk")
+    
+    {
+      echo "Foreign keys FROM this table to other tables:"
+      echo "-------------------------------------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        --table -e "$query_fk_out"
+      
+      echo
+      echo "Foreign keys TO this table from other tables:"
+      echo "-------------------------------------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        --table -e "$query_fk_in"
+    } > "$fk_file"
+    
+    # Use less directly on the file
+    less -RS "$fk_file"
+    
+    # Clean up
+    rm -f "$fk_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    echo "Foreign keys FROM this table to other tables:"
+    echo "-------------------------------------------"
+    mysql_exec "$Database" --table -e "$query_fk_out" 
+    
+    echo
+    echo "Foreign keys TO this table from other tables:"
+    echo "-------------------------------------------"
+    mysql_exec "$Database" --table -e "$query_fk_in"
+  fi
+  
+  return 0
+}
+
+# Create a backup of current table or database
+handle_cmd_backup() {
+  local output_file="$1"
+  local current_time
+  current_time=$(date +"%Y%m%d_%H%M%S")
+  
+  if [[ -z "$Database" ]]; then
+    error "No database selected. Use /database first."
+    return 1
+  fi
+  
+  # Determine what to backup (table or database)
+  local backup_type="database"
+  local backup_name="$Database"
+  local table_option=""
+  
+  if [[ -n "$DataTable" ]]; then
+    backup_type="table"
+    backup_name="$Database.$DataTable"
+    table_option="--tables $DataTable"
+  fi
+  
+  # Default filename if not provided
+  if [[ -z "$output_file" ]]; then
+    if [[ "$backup_type" == "table" ]]; then
+      output_file="${Database}_${DataTable}_${current_time}.sql"
+    else
+      output_file="${Database}_${current_time}.sql"
+    fi
+  fi
+  
+  # Check if mysqldump is available
+  if ! command -v mysqldump > /dev/null; then
+    error "mysqldump command not found. Cannot create backup."
+    return 1
+  fi
+  
+  info "Creating backup of $backup_type '$backup_name' to file '$output_file'..."
+  
+  # Get mysqldump options from the config file
+  local mysqldump_options="--defaults-file=\"$PROFILE\" --add-drop-table --routines --triggers"
+  
+  # Create the backup
+  local dump_cmd="mysqldump $mysqldump_options $Database $table_option > \"$output_file\""
+  
+  # Execute the dump command
+  if eval "$dump_cmd"; then
+    success "Backup completed successfully to '$output_file'."
+    info "File size: $(du -h "$output_file" | cut -f1)"
+  else
+    error "Backup failed with status $?."
+    return 1
+  fi
+  
+  return 0
+}
+
+# Show character set information
+handle_cmd_charset() {
+  info "Character Set Information:"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  local target="server"
+  local query_server="SHOW VARIABLES LIKE 'character\\_set\\_%';"
+  local query_db=""
+  local query_table=""
+  
+  # If a database is selected, also show database charset
+  if [[ -n "$Database" ]]; then
+    target="database $Database"
+    query_db="SELECT DEFAULT_CHARACTER_SET_NAME as 'Database Character Set'
+              FROM information_schema.SCHEMATA 
+              WHERE SCHEMA_NAME = $(escape_sql_value "$Database");"
+  fi
+  
+  # If a table is selected, also show table and column charset
+  if [[ -n "$DataTable" ]]; then
+    target="table $Database.$DataTable"
+    query_table="SELECT CCSA.character_set_name as 'Table Character Set'
+                 FROM information_schema.TABLES T
+                 JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY CCSA
+                 ON T.TABLE_COLLATION = CCSA.COLLATION_NAME
+                 WHERE T.TABLE_SCHEMA = $(escape_sql_value "$Database")
+                 AND T.TABLE_NAME = $(escape_sql_value "$DataTable");"
+    
+    query_columns="SELECT COLUMN_NAME as 'Column',
+                        CHARACTER_SET_NAME as 'Character Set',
+                        COLLATION_NAME as 'Collation'
+                 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = $(escape_sql_value "$Database")
+                 AND TABLE_NAME = $(escape_sql_value "$DataTable")
+                 AND CHARACTER_SET_NAME IS NOT NULL;"
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local charset_file
+    charset_file=$(create_secure_tempfile "${PRG}.charset")
+    
+    {
+      echo "Character Set Information for $target:"
+      echo "--------------------------------------"
+      echo
+      
+      echo "Server Character Sets:"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "$query_server"
+      
+      if [[ -n "$query_db" ]]; then
+        echo
+        echo "Database Character Set:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_db"
+      fi
+      
+      if [[ -n "$query_table" ]]; then
+        echo
+        echo "Table Character Set:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_table"
+        
+        echo
+        echo "Column Character Sets:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query_columns"
+      fi
+    } > "$charset_file"
+    
+    # Use less directly on the file
+    less -RS "$charset_file"
+    
+    # Clean up
+    rm -f "$charset_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    echo "Character Set Information for $target:"
+    echo "--------------------------------------"
+    echo
+    
+    echo "Server Character Sets:"
+    mysql_exec --table -e "$query_server"
+    
+    if [[ -n "$query_db" ]]; then
+      echo
+      echo "Database Character Set:"
+      mysql_exec --table -e "$query_db"
+    fi
+    
+    if [[ -n "$query_table" ]]; then
+      echo
+      echo "Table Character Set:"
+      mysql_exec --table -e "$query_table"
+      
+      echo
+      echo "Column Character Sets:"
+      mysql_exec "$Database" --table -e "$query_columns"
+    fi
+  fi
+  
+  return 0
+}
+
+# List available storage engines
+handle_cmd_engines() {
+  info "Available Storage Engines:"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local engines_file
+    engines_file=$(create_secure_tempfile "${PRG}.engines")
+    
+    # Output to temp file
+    mysql --defaults-file="$PROFILE" --no-auto-rehash \
+      --table -e "SHOW ENGINES;" > "$engines_file"
+    
+    # Use less directly on the file
+    less -RS "$engines_file"
+    
+    # Clean up
+    rm -f "$engines_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    mysql_exec --table -e "SHOW ENGINES;"
+  fi
+  
+  # If a database is selected, show engine usage
+  if [[ -n "$Database" ]]; then
+    echo
+    echo "Storage engines used in database '$Database':"
+    
+    local query_engines
+    query_engines="SELECT 
+                     TABLE_NAME as 'Table',
+                     ENGINE as 'Storage Engine'
+                   FROM information_schema.TABLES
+                   WHERE TABLE_SCHEMA = $(escape_sql_value "$Database")
+                   ORDER BY ENGINE, TABLE_NAME;"
+    
+    mysql_exec --table -e "$query_engines"
+    
+    # Show engine counts
+    echo
+    echo "Engine usage summary:"
+    
+    local query_summary
+    query_summary="SELECT 
+                     ENGINE as 'Storage Engine',
+                     COUNT(*) as 'Number of Tables'
+                   FROM information_schema.TABLES
+                   WHERE TABLE_SCHEMA = $(escape_sql_value "$Database")
+                   GROUP BY ENGINE
+                   ORDER BY COUNT(*) DESC;"
+    
+    mysql_exec --table -e "$query_summary"
+  fi
+  
+  return 0
+}
+
+# Show information about a specified MySQL user
+handle_cmd_whois() {
+  local user_input="$*"
+  local user_name
+  local host_name
+  
+  # Default to current user if no user specified
+  if [[ -z "$user_input" ]]; then
+    user_input=$(mysql_exec -Nse "SELECT CURRENT_USER();")
+    info "No user specified, using current user: $user_input"
+  fi
+  
+  # Parse user@host format
+  if [[ "$user_input" == *"@"* ]]; then
+    user_name="${user_input%%@*}"
+    host_name="${user_input##*@}"
+  else
+    user_name="$user_input"
+    host_name="%"  # Match any host if not specified
+  fi
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local whois_file
+    whois_file=$(create_secure_tempfile "${PRG}.whois")
+    
+    {
+      echo "User Information for '$user_name'@'$host_name':"
+      echo "-----------------------------------------"
+      echo
+      
+      # Get basic user info
+      echo "User Accounts:"
+      echo "-------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "SELECT 
+                  User, 
+                  Host, 
+                  IF(plugin='mysql_native_password','Native Password',
+                    IF(plugin='caching_sha2_password','SHA-2 Password', plugin)) AS 'Auth Method',
+                  Account_locked AS 'Locked',
+                  Password_expired AS 'Password Expired'
+                FROM mysql.user
+                WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+                ORDER BY User, Host;"
+      
+      # Get global grants
+      echo
+      echo "Global Privileges:"
+      echo "----------------"
+      
+      local query_global_privs
+      query_global_privs="SHOW GRANTS FOR '${user_name}'@'${host_name}';"
+      
+      # Safely try to show grants, but don't error if we don't have permission
+      if ! mysql --defaults-file="$PROFILE" --no-auto-rehash \
+           --table -e "$query_global_privs" 2>/dev/null; then
+        echo "ERROR: Unable to show grants for '${user_name}'@'${host_name}'"
+        echo "This may be due to insufficient privileges or the user does not exist."
+      fi
+      
+      # Get database-specific privileges
+      echo
+      echo "Database-Specific Privileges:"
+      echo "---------------------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "SELECT 
+                  Db AS 'Database',
+                  CONCAT(
+                    IF(Select_priv='Y','SELECT,',''),
+                    IF(Insert_priv='Y','INSERT,',''),
+                    IF(Update_priv='Y','UPDATE,',''),
+                    IF(Delete_priv='Y','DELETE,',''),
+                    IF(Create_priv='Y','CREATE,',''),
+                    IF(Drop_priv='Y','DROP,',''),
+                    IF(Grant_priv='Y','GRANT,',''),
+                    IF(References_priv='Y','REFERENCES,',''),
+                    IF(Index_priv='Y','INDEX,',''),
+                    IF(Alter_priv='Y','ALTER,',''),
+                    IF(Create_tmp_table_priv='Y','CREATE_TMP,',''),
+                    IF(Lock_tables_priv='Y','LOCK TABLES,',''),
+                    IF(Create_view_priv='Y','CREATE VIEW,',''),
+                    IF(Show_view_priv='Y','SHOW VIEW,',''),
+                    IF(Create_routine_priv='Y','CREATE ROUTINE,',''),
+                    IF(Alter_routine_priv='Y','ALTER ROUTINE,',''),
+                    IF(Execute_priv='Y','EXECUTE,','')
+                  ) AS 'Database Privileges'
+                FROM mysql.db
+                WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+                ORDER BY Db;"
+      
+      # Get table-specific privileges
+      echo
+      echo "Table-Specific Privileges:"
+      echo "------------------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "SELECT 
+                  Db AS 'Database',
+                  Table_name AS 'Table',
+                  CONCAT(
+                    IF(Table_priv & 1,'SELECT,',''),
+                    IF(Table_priv & 2,'INSERT,',''),
+                    IF(Table_priv & 4,'UPDATE,',''),
+                    IF(Table_priv & 8,'DELETE,',''),
+                    IF(Table_priv & 16,'CREATE,',''),
+                    IF(Table_priv & 32,'DROP,',''),
+                    IF(Table_priv & 64,'GRANT,',''),
+                    IF(Table_priv & 128,'REFERENCES,',''),
+                    IF(Table_priv & 256,'INDEX,',''),
+                    IF(Table_priv & 512,'ALTER,','')
+                  ) AS 'Table Privileges'
+                FROM mysql.tables_priv
+                WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+                ORDER BY Db, Table_name;"
+    } > "$whois_file"
+    
+    # Use less directly on the file
+    less -RS "$whois_file"
+    
+    # Clean up
+    rm -f "$whois_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    echo "User Information for '$user_name'@'$host_name':"
+    echo "-----------------------------------------"
+    echo
+    
+    # Get basic user info
+    echo "User Accounts:"
+    echo "-------------"
+    mysql_exec --table -e "SELECT 
+                User, 
+                Host, 
+                IF(plugin='mysql_native_password','Native Password',
+                  IF(plugin='caching_sha2_password','SHA-2 Password', plugin)) AS 'Auth Method',
+                Account_locked AS 'Locked',
+                Password_expired AS 'Password Expired'
+              FROM mysql.user
+              WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+              ORDER BY User, Host;"
+    
+    # Get global grants
+    echo
+    echo "Global Privileges:"
+    echo "----------------"
+    
+    local query_global_privs
+    query_global_privs="SHOW GRANTS FOR '${user_name}'@'${host_name}';"
+    
+    # Safely try to show grants, but don't error if we don't have permission
+    if ! mysql_exec --table -e "$query_global_privs" 2>/dev/null; then
+      echo "ERROR: Unable to show grants for '${user_name}'@'${host_name}'"
+      echo "This may be due to insufficient privileges or the user does not exist."
+    fi
+    
+    # Get database-specific privileges
+    echo
+    echo "Database-Specific Privileges:"
+    echo "---------------------------"
+    mysql_exec --table -e "SELECT 
+                Db AS 'Database',
+                CONCAT(
+                  IF(Select_priv='Y','SELECT,',''),
+                  IF(Insert_priv='Y','INSERT,',''),
+                  IF(Update_priv='Y','UPDATE,',''),
+                  IF(Delete_priv='Y','DELETE,',''),
+                  IF(Create_priv='Y','CREATE,',''),
+                  IF(Drop_priv='Y','DROP,',''),
+                  IF(Grant_priv='Y','GRANT,',''),
+                  IF(References_priv='Y','REFERENCES,',''),
+                  IF(Index_priv='Y','INDEX,',''),
+                  IF(Alter_priv='Y','ALTER,',''),
+                  IF(Create_tmp_table_priv='Y','CREATE_TMP,',''),
+                  IF(Lock_tables_priv='Y','LOCK TABLES,',''),
+                  IF(Create_view_priv='Y','CREATE VIEW,',''),
+                  IF(Show_view_priv='Y','SHOW VIEW,',''),
+                  IF(Create_routine_priv='Y','CREATE ROUTINE,',''),
+                  IF(Alter_routine_priv='Y','ALTER ROUTINE,',''),
+                  IF(Execute_priv='Y','EXECUTE,','')
+                ) AS 'Database Privileges'
+              FROM mysql.db
+              WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+              ORDER BY Db;"
+    
+    # Get table-specific privileges
+    echo
+    echo "Table-Specific Privileges:"
+    echo "------------------------"
+    mysql_exec --table -e "SELECT 
+                Db AS 'Database',
+                Table_name AS 'Table',
+                CONCAT(
+                  IF(Table_priv & 1,'SELECT,',''),
+                  IF(Table_priv & 2,'INSERT,',''),
+                  IF(Table_priv & 4,'UPDATE,',''),
+                  IF(Table_priv & 8,'DELETE,',''),
+                  IF(Table_priv & 16,'CREATE,',''),
+                  IF(Table_priv & 32,'DROP,',''),
+                  IF(Table_priv & 64,'GRANT,',''),
+                  IF(Table_priv & 128,'REFERENCES,',''),
+                  IF(Table_priv & 256,'INDEX,',''),
+                  IF(Table_priv & 512,'ALTER,','')
+                ) AS 'Table Privileges'
+              FROM mysql.tables_priv
+              WHERE User LIKE '${user_name}' AND Host LIKE '${host_name}'
+              ORDER BY Db, Table_name;"
+  fi
+  
+  return 0
+}
+
+# Show current MySQL user
+handle_cmd_whoami() {
+  info "Current MySQL user:"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local whoami_file
+    whoami_file=$(create_secure_tempfile "${PRG}.whoami")
+    
+    {
+      echo "Current MySQL User:"
+      echo "------------------"
+      echo
+      
+      # Query to get current user and host with table format
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "SELECT USER() AS 'Current User', CURRENT_USER() AS 'Effective User';"
+      
+      # If a database is selected, also show privileges
+      if [[ -n "$Database" ]]; then
+        echo
+        echo "Privileges for current user:"
+        echo "--------------------------"
+        
+        local query_privs
+        query_privs="SHOW GRANTS FOR CURRENT_USER();"
+        
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_privs"
+          
+        # Additional database-specific privileges if available
+        if mysql --defaults-file="$PROFILE" --no-auto-rehash information_schema -e "SELECT 1 FROM TABLES WHERE 1=0" &>/dev/null; then
+          echo
+          echo "Database-specific privileges for current user:"
+          echo "------------------------------------------"
+          
+          mysql --defaults-file="$PROFILE" --no-auto-rehash \
+            --table -e "SELECT PRIVILEGE_TYPE, IS_GRANTABLE 
+                      FROM information_schema.USER_PRIVILEGES 
+                      WHERE GRANTEE LIKE CONCAT(\"'%\", SUBSTRING_INDEX(CURRENT_USER(), '@', 1), \"%'\") 
+                      ORDER BY PRIVILEGE_TYPE;"
+        fi
+      fi
+    } > "$whoami_file"
+    
+    # Use less directly on the file
+    less -RS "$whoami_file"
+    
+    # Clean up
+    rm -f "$whoami_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    echo "Current MySQL User:"
+    echo "------------------"
+    echo
+    
+    # Query to get current user and host with table format
+    mysql_exec --table -e "SELECT USER() AS 'Current User', CURRENT_USER() AS 'Effective User';"
+    
+    # If a database is selected, also show privileges
+    if [[ -n "$Database" ]]; then
+      echo
+      echo "Privileges for current user:"
+      echo "--------------------------"
+      
+      local query_privs
+      query_privs="SHOW GRANTS FOR CURRENT_USER();"
+      
+      mysql_exec --table -e "$query_privs"
+        
+      # Additional database-specific privileges if available
+      if mysql_exec information_schema -e "SELECT 1 FROM TABLES WHERE 1=0" &>/dev/null; then
+        echo
+        echo "Database-specific privileges for current user:"
+        echo "------------------------------------------"
+        
+        mysql_exec --table -e "SELECT PRIVILEGE_TYPE, IS_GRANTABLE 
+                    FROM information_schema.USER_PRIVILEGES 
+                    WHERE GRANTEE LIKE CONCAT(\"'%\", SUBSTRING_INDEX(CURRENT_USER(), '@', 1), \"%'\") 
+                    ORDER BY PRIVILEGE_TYPE;"
+      fi
+    fi
+  fi
+  
+  return 0
+}
+
+# List MySQL users and their privileges
+handle_cmd_users() {
+  info "MySQL Users and Privileges:"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # First, get list of users
+  local query_users="SELECT 
+                     User, 
+                     Host, 
+                     IF(plugin='mysql_native_password','Native Password',
+                       IF(plugin='caching_sha2_password','SHA-2 Password', plugin)) AS 'Auth Method',
+                     Account_locked as 'Locked'
+                   FROM mysql.user
+                   ORDER BY User, Host;"
+  
+  # Then get global privileges
+  local query_global_privs="SELECT 
+                          User, 
+                          Host,
+                          CONCAT(
+                            IF(Select_priv='Y','SELECT,',''),
+                            IF(Insert_priv='Y','INSERT,',''),
+                            IF(Update_priv='Y','UPDATE,',''),
+                            IF(Delete_priv='Y','DELETE,',''),
+                            IF(Create_priv='Y','CREATE,',''),
+                            IF(Drop_priv='Y','DROP,',''),
+                            IF(Grant_priv='Y','GRANT,',''),
+                            IF(References_priv='Y','REFERENCES,',''),
+                            IF(Index_priv='Y','INDEX,',''),
+                            IF(Alter_priv='Y','ALTER,',''),
+                            IF(Create_tmp_table_priv='Y','CREATE_TMP,',''),
+                            IF(Lock_tables_priv='Y','LOCK TABLES,',''),
+                            IF(Create_view_priv='Y','CREATE VIEW,',''),
+                            IF(Show_view_priv='Y','SHOW VIEW,',''),
+                            IF(Create_routine_priv='Y','CREATE ROUTINE,',''),
+                            IF(Alter_routine_priv='Y','ALTER ROUTINE,',''),
+                            IF(Execute_priv='Y','EXECUTE,',''),
+                            IF(Super_priv='Y','SUPER,','')
+                          ) AS 'Global Privileges'
+                        FROM mysql.user
+                        ORDER BY User, Host;"
+  
+  # Database-specific privileges query
+  local query_db_privs="SELECT 
+                       User, 
+                       Host, 
+                       Db,
+                       CONCAT(
+                         IF(Select_priv='Y','SELECT,',''),
+                         IF(Insert_priv='Y','INSERT,',''),
+                         IF(Update_priv='Y','UPDATE,',''),
+                         IF(Delete_priv='Y','DELETE,',''),
+                         IF(Create_priv='Y','CREATE,',''),
+                         IF(Drop_priv='Y','DROP,',''),
+                         IF(Grant_priv='Y','GRANT,',''),
+                         IF(References_priv='Y','REFERENCES,',''),
+                         IF(Index_priv='Y','INDEX,',''),
+                         IF(Alter_priv='Y','ALTER,',''),
+                         IF(Create_tmp_table_priv='Y','CREATE_TMP,',''),
+                         IF(Lock_tables_priv='Y','LOCK TABLES,',''),
+                         IF(Create_view_priv='Y','CREATE VIEW,',''),
+                         IF(Show_view_priv='Y','SHOW VIEW,',''),
+                         IF(Create_routine_priv='Y','CREATE ROUTINE,',''),
+                         IF(Alter_routine_priv='Y','ALTER ROUTINE,',''),
+                         IF(Execute_priv='Y','EXECUTE,','')
+                       ) AS 'Database Privileges'
+                     FROM mysql.db
+                     ORDER BY User, Host, Db;"
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    # Create a temporary file for all output to avoid piping issues
+    local users_file
+    users_file=$(create_secure_tempfile "${PRG}.users")
+    
+    {
+      echo "MySQL Users:"
+      echo "-----------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "$query_users"
+      
+      echo
+      echo "Global Privileges:"
+      echo "----------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "$query_global_privs"
+      
+      echo
+      echo "Database-Specific Privileges:"
+      echo "---------------------------"
+      mysql --defaults-file="$PROFILE" --no-auto-rehash \
+        --table -e "$query_db_privs"
+      
+      # If a database is selected, also show table privileges
+      if [[ -n "$Database" ]]; then
+        echo
+        echo "Table Privileges for database '$Database':"
+        echo "-------------------------------------"
+        local query_table_privs
+        query_table_privs="SELECT 
+                         User, 
+                         Host, 
+                         Table_name,
+                         CONCAT(
+                           IF(Table_priv & 1,'SELECT,',''),
+                           IF(Table_priv & 2,'INSERT,',''),
+                           IF(Table_priv & 4,'UPDATE,',''),
+                           IF(Table_priv & 8,'DELETE,',''),
+                           IF(Table_priv & 16,'CREATE,',''),
+                           IF(Table_priv & 32,'DROP,',''),
+                           IF(Table_priv & 64,'GRANT,',''),
+                           IF(Table_priv & 128,'REFERENCES,',''),
+                           IF(Table_priv & 256,'INDEX,',''),
+                           IF(Table_priv & 512,'ALTER,','')
+                         ) AS 'Table Privileges'
+                       FROM mysql.tables_priv
+                       WHERE Db = $(escape_sql_value "$Database")
+                       ORDER BY User, Host, Table_name;"
+        
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_table_privs"
+      fi
+    } > "$users_file"
+    
+    # Use less on the file directly instead of piping
+    less -RS "$users_file"
+    
+    # Clean up temp file
+    rm -f "$users_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    echo "MySQL Users:"
+    echo "-----------"
+    mysql_exec --table -e "$query_users"
+    
+    echo
+    echo "Global Privileges:"
+    echo "----------------"
+    mysql_exec --table -e "$query_global_privs"
+    
+    echo
+    echo "Database-Specific Privileges:"
+    echo "---------------------------"
+    mysql_exec --table -e "$query_db_privs"
+    
+    # If a database is selected, also show table privileges
+    if [[ -n "$Database" ]]; then
+      echo
+      echo "Table Privileges for database '$Database':"
+      echo "-------------------------------------"
+      local query_table_privs
+      query_table_privs="SELECT 
+                       User, 
+                       Host, 
+                       Table_name,
+                       CONCAT(
+                         IF(Table_priv & 1,'SELECT,',''),
+                         IF(Table_priv & 2,'INSERT,',''),
+                         IF(Table_priv & 4,'UPDATE,',''),
+                         IF(Table_priv & 8,'DELETE,',''),
+                         IF(Table_priv & 16,'CREATE,',''),
+                         IF(Table_priv & 32,'DROP,',''),
+                         IF(Table_priv & 64,'GRANT,',''),
+                         IF(Table_priv & 128,'REFERENCES,',''),
+                         IF(Table_priv & 256,'INDEX,',''),
+                         IF(Table_priv & 512,'ALTER,','')
+                       ) AS 'Table Privileges'
+                     FROM mysql.tables_priv
+                     WHERE Db = $(escape_sql_value "$Database")
+                     ORDER BY User, Host, Table_name;"
+      
+      mysql_exec --table -e "$query_table_privs"
+    fi
+  fi
+  
+  info "Note: Some privileges might require additional permissions to view."
+  return 0
+}
+
+# Show active MySQL processes
+handle_cmd_processes() {
+  info "Active MySQL Processes:"
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local proc_file
+    proc_file=$(create_secure_tempfile "${PRG}.procs")
+    
+    # Output to temp file
+    mysql --defaults-file="$PROFILE" --no-auto-rehash \
+      --table -e "SHOW FULL PROCESSLIST;" > "$proc_file"
+    
+    # Use less directly on the file
+    less -RS "$proc_file"
+    
+    # Clean up
+    rm -f "$proc_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    mysql_exec --table -e "SHOW FULL PROCESSLIST;"
+  fi
+  
+  # Add option to kill a process
+  info "To kill a process, use SQL: KILL <process_id>"
+  
+  return 0
+}
+
+# Display MySQL system variables
+handle_cmd_variables() {
+  local filter="$*"
+  local query
+  
+  if [[ -n "$filter" ]]; then
+    # If a filter is provided, use it to narrow down the variables
+    info "MySQL System Variables (filtered by '$filter'):"
+    query="SHOW VARIABLES WHERE Variable_name LIKE '%$(mysql_exec -e "SELECT $(escape_sql_value "$filter");" | tr -d "'")%';"
+  else
+    # Otherwise show all variables
+    info "MySQL System Variables:"
+    query="SHOW VARIABLES;"
+  fi
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  # Execute with appropriate formatting and paging
+  if (( use_pager )); then
+    local vars_file
+    vars_file=$(create_secure_tempfile "${PRG}.vars")
+    
+    # Output to temp file
+    mysql --defaults-file="$PROFILE" --no-auto-rehash \
+      --table -e "$query" > "$vars_file"
+    
+    # Use less directly on the file
+    less -RS "$vars_file"
+    
+    # Clean up
+    rm -f "$vars_file"
+    
+    # Reset terminal after using less
+    stty sane 2>/dev/null || true
+  else
+    # Direct output without pager
+    mysql_exec --table -e "$query"
+  fi
+  
+  info "Filter variables with: /variables <filter>"
+  
+  return 0
+}
+
+# Export query results to a file
+handle_cmd_export() {
+  if [[ -z "$Database" ]]; then
+    error "No database selected. Use /database first."
+    return 1
+  fi
+  
+  if [[ -z "$DataTable" ]]; then
+    error "No table selected. Use /table first."
+    return 1
+  fi
+  
+  # Parse arguments safely
+  local filename=""
+  local format="csv"  # Default format
+  local include_headers=1
+  local delimiter=","
+  
+  # Create a safely quoted version of the arguments for processing
+  local args=()
+  for arg in "$@"; do
+    args+=("$arg")
+  done
+  
+  # Check for format flag first
+  for ((i=0; i<${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--format" ]]; then
+      if [[ $((i+1)) -lt ${#args[@]} ]]; then
+        format="${args[$((i+1))]}"
+        # Remove these arguments
+        args=("${args[@]:0:$i}" "${args[@]:$((i+2))}")
+        break
+      fi
+    fi
+  done
+  
+  # Check for headers flag
+  for ((i=0; i<${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--no-headers" ]]; then
+      include_headers=0
+      # Remove this argument
+      args=("${args[@]:0:$i}" "${args[@]:$((i+1))}")
+      break
+    fi
+  done
+  
+  # Check for delimiter flag
+  for ((i=0; i<${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--delimiter" ]]; then
+      if [[ $((i+1)) -lt ${#args[@]} ]]; then
+        delimiter="${args[$((i+1))]}"
+        # Remove these arguments
+        args=("${args[@]:0:$i}" "${args[@]:$((i+2))}")
+        break
+      fi
+    fi
+  done
+  
+  # First argument (if any) is now the filename
+  if [[ ${#args[@]} -gt 0 ]]; then
+    filename="${args[0]}"
+  fi
+  
+  # Generate default filename if not provided
+  if [[ -z "$filename" ]]; then
+    local current_time
+    current_time=$(date +"%Y%m%d_%H%M%S")
+    filename="${Database}_${DataTable}_${current_time}.${format}"
+  fi
+  
+  # Validate format
+  case "$format" in
+    csv|CSV)
+      format="csv"
+      ;;
+    sql|SQL)
+      format="sql"
+      ;;
+    json|JSON)
+      format="json"
+      ;;
+    *)
+      error "Unsupported format: $format. Use csv, sql, or json."
+      return 1
+      ;;
+  esac
+  
+  # Build the SQL query
+  local sql="SELECT "
+  
+  # Handle column selection
+  if [[ "${SelectedColumns[*]}" == "*" ]]; then
+    sql+="*"
+  else
+    local quoted_cols=()
+    local col
+    for col in "${SelectedColumns[@]}"; do
+      # Quote each column identifier
+      quoted_cols+=("$(quote_ident "$col")")
+    done
+    sql+=$(IFS=,; echo "${quoted_cols[*]}")
+  fi
+  
+  # Add table name (safely quoted)
+  sql+=" FROM $(quote_ident "$DataTable")"
+  
+  # Add WHERE clause if specified
+  if [[ -n "$WhereClause" ]]; then
+    sql+=" WHERE $WhereClause"
+  fi
+  
+  # Add ORDER BY if specified
+  if [[ -n "$OrderClause" ]]; then
+    local order_parts
+    IFS=',' read -ra order_parts <<< "$OrderClause"
+    local quoted_order_parts=()
+    local part
+    for part in "${order_parts[@]}"; do
+      quoted_order_parts+=("$(quote_ident "$(trim "$part")")")
+    done
+    sql+=" ORDER BY $(IFS=,; echo "${quoted_order_parts[*]}") $OrderDirection"
+  fi
+  
+  # Add LIMIT if specified
+  if [[ -n "$LimitClause" ]]; then
+    if [[ "$LimitClause" =~ ^[0-9]+$ ]]; then
+      sql+=" LIMIT $LimitClause"
+    else
+      error "Invalid LIMIT value: $LimitClause (must be numeric)"
+      return 1
+    fi
+  fi
+  
+  info "Exporting data from '$Database.$DataTable' to '$filename' in $format format..."
+  
+  # Export based on format
+  case "$format" in
+    csv)
+      # Export as CSV
+      local mysql_args=""
+      if (( include_headers )); then
+        mysql_args+=" -B"  # Include column names as first row
+      else
+        mysql_args+=" -N"  # Skip column names
+      fi
+      
+      # Need to handle custom delimiter
+      if [[ "$delimiter" != "," ]]; then
+        local temp_file
+        temp_file=$(create_secure_tempfile "${PRG}.export")
+        # shellcheck disable=SC2086
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" ${mysql_args} -e "$sql" > "$temp_file"
+        if [[ "$delimiter" == "tab" || "$delimiter" == "\t" ]]; then
+          # Special case for tab-delimited
+          tr '\t' '\t' < "$temp_file" > "$filename"
+        else
+          # Replace default delimiter with custom one
+          tr '\t' "$delimiter" < "$temp_file" > "$filename"
+        fi
+        rm -f "$temp_file"
+      else
+        # Standard CSV with comma delimiter
+        # shellcheck disable=SC2086
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" ${mysql_args} -e "$sql" | \
+          sed 's/\t/,/g' > "$filename"
+      fi
+      ;;
+      
+    sql)
+      # Export as SQL INSERT statements
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+        -e "SELECT * FROM ($sql) AS export_query INTO OUTFILE '$filename' 
+           FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '\"'
+           LINES TERMINATED BY '\n';" || {
+        # If the direct outfile fails (due to permissions), use mysqldump
+        mysqldump --defaults-file="$PROFILE" --no-create-info --no-create-db \
+          --complete-insert --extended-insert=FALSE --skip-triggers --compact \
+          "$Database" "$DataTable" --where="${WhereClause:-1}" > "$filename" || {
+          error "Export failed. Check permissions or try a different path."
+          return 1
+        }
+      }
+      ;;
+      
+    json)
+      # Export as JSON
+      # Use a temporary file for intermediate results
+      local temp_file
+      temp_file=$(create_secure_tempfile "${PRG}.export")
+      
+      # Get column names first for JSON object keys
+      local columns_list
+      columns_list=$(mysql_exec "$Database" -Nse "SHOW COLUMNS FROM $(quote_ident "$DataTable") WHERE 1;") || { 
+        error "Could not retrieve columns for '$Database.$DataTable'."
+        rm -f "$temp_file"
+        return 1
+      }
+      
+      # Extract just the column names
+      local columns=()
+      mapfile -t columns < <(echo "$columns_list" | awk '{print $1}')
+      
+      # Modify SQL to output in a format we can convert to JSON
+      mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" -N -e "$sql" > "$temp_file"
+      
+      # Convert tab-delimited output to JSON
+      echo "[" > "$filename"
+      local line_count=0
+      while IFS=$'\t' read -r -a values; do
+        if (( line_count > 0 )); then
+          echo "," >> "$filename"
+        fi
+        echo -n "  {" >> "$filename"
+        
+        local field_count=0
+        for i in "${!values[@]}"; do
+          if (( i < ${#columns[@]} )); then
+            if (( field_count > 0 )); then
+              echo -n "," >> "$filename"
+            fi
+            # Properly escape JSON field value
+            local escaped_value="${values[i]//\\/\\\\}"  # Escape backslashes
+            escaped_value="${escaped_value//\"/\\\"}"    # Escape quotes
+            escaped_value="${escaped_value//$'\n'/\\n}"  # Escape newlines
+            echo -n "\"${columns[i]}\":\"$escaped_value\"" >> "$filename"
+            ((field_count++))
+          fi
+        done
+        
+        echo -n "}" >> "$filename"
+        ((line_count++))
+      done < "$temp_file"
+      echo -e "\n]" >> "$filename"
+      
+      rm -f "$temp_file"
+      ;;
+  esac
+  
+  # Check if the file was created successfully
+  if [[ -f "$filename" ]]; then
+    success "Export completed to '$filename'."
+    info "Exported $(wc -l < "$filename") rows."
+    info "File size: $(du -h "$filename" | cut -f1)"
+  else
+    error "Export failed. File was not created."
+    return 1
+  fi
+  
+  return 0
+}
+
+# Show database/table statistics and metrics
+handle_cmd_stats() {
+  if [[ -z "$Database" ]]; then
+    error "No database selected. Use /database first."
+    return 1
+  fi
+  
+  # Check if less is available for paging
+  local use_pager=0
+  if command -v less >/dev/null; then
+    use_pager=1
+  fi
+  
+  if [[ -n "$DataTable" ]]; then
+    # Table-specific statistics
+    info "Statistics for table '$Database.$DataTable':"
+    
+    # Get basic stats
+    local query_basic
+    query_basic="SHOW TABLE STATUS LIKE $(escape_sql_value "$DataTable");"
+    
+    # Get index stats
+    local query_indexes
+    query_indexes="SHOW INDEX FROM $(quote_ident "$DataTable");"
+    
+    # Get column stats
+    local query_columns
+    query_columns="SELECT 
+                 COLUMN_NAME, 
+                 DATA_TYPE,
+                 CHARACTER_MAXIMUM_LENGTH as 'Max Length',
+                 IS_NULLABLE as 'Nullable',
+                 COLUMN_DEFAULT as 'Default',
+                 EXTRA
+               FROM information_schema.COLUMNS
+               WHERE TABLE_SCHEMA = $(escape_sql_value "$Database")
+               AND TABLE_NAME = $(escape_sql_value "$DataTable")
+               ORDER BY ORDINAL_POSITION;"
+    
+    # Table cardinality distribution
+    local query_card
+    query_card="ANALYZE TABLE $(quote_ident "$DataTable");"
+    
+    # Execute with appropriate formatting and paging
+    if (( use_pager )); then
+      # Create a temporary file for all output to avoid piping issues
+      local stats_file
+      stats_file=$(create_secure_tempfile "${PRG}.stats")
+      
+      {
+        echo "Table Statistics for '$Database.$DataTable':"
+        echo "----------------------------------------"
+        echo
+        echo "Basic Information:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query_basic"
+        
+        echo
+        echo "Column Statistics:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query_columns"
+        
+        echo
+        echo "Index Statistics:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query_indexes"
+        
+        echo
+        echo "Row Counts:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          -e "SELECT COUNT(*) as 'Total Rows' FROM $(quote_ident "$DataTable");"
+        
+        # Additional stats depending on the MySQL version
+        echo
+        echo "Index Cardinality:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
+          --table -e "$query_card"
+      } > "$stats_file"
+      
+      # Use less on the file directly instead of piping
+      less -RS "$stats_file"
+      
+      # Clean up temp file
+      rm -f "$stats_file"
+      
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    else
+      # Direct output without pager
+      echo "Table Statistics for '$Database.$DataTable':"
+      echo "----------------------------------------"
+      echo
+      echo "Basic Information:"
+      mysql_exec "$Database" --table -e "$query_basic"
+      
+      echo
+      echo "Column Statistics:"
+      mysql_exec "$Database" --table -e "$query_columns"
+      
+      echo
+      echo "Index Statistics:"
+      mysql_exec "$Database" --table -e "$query_indexes"
+      
+      echo
+      echo "Row Counts:"
+      mysql_exec "$Database" -e "SELECT COUNT(*) as 'Total Rows' FROM $(quote_ident "$DataTable");"
+      
+      # Additional stats depending on the MySQL version
+      echo
+      echo "Index Cardinality:"
+      mysql_exec "$Database" --table -e "$query_card"
+    fi
+  else
+    # Database-wide statistics
+    info "Statistics for database '$Database':"
+    
+    # Get tables stats
+    local query_tables
+    query_tables="SELECT 
+                TABLE_NAME as 'Table',
+                TABLE_ROWS as 'Rows',
+                ROUND(DATA_LENGTH/1024/1024, 2) as 'Data Size (MB)',
+                ROUND(INDEX_LENGTH/1024/1024, 2) as 'Index Size (MB)',
+                ROUND((DATA_LENGTH+INDEX_LENGTH)/1024/1024, 2) as 'Total Size (MB)',
+                TABLE_COLLATION as 'Collation',
+                ENGINE as 'Engine',
+                CREATE_TIME as 'Created',
+                UPDATE_TIME as 'Updated'
+              FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = $(escape_sql_value "$Database")
+              ORDER BY (DATA_LENGTH+INDEX_LENGTH) DESC;"
+    
+    # Get database size
+    local query_size
+    query_size="SELECT 
+              COUNT(*) as 'Tables',
+              ROUND(SUM(DATA_LENGTH)/1024/1024, 2) as 'Data Size (MB)',
+              ROUND(SUM(INDEX_LENGTH)/1024/1024, 2) as 'Index Size (MB)',
+              ROUND(SUM(DATA_LENGTH+INDEX_LENGTH)/1024/1024, 2) as 'Total Size (MB)'
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = $(escape_sql_value "$Database");"
+    
+    # Execute with appropriate formatting and paging
+    if (( use_pager )); then
+      # Create a temporary file for all output to avoid piping issues
+      local stats_file
+      stats_file=$(create_secure_tempfile "${PRG}.stats")
+      
+      {
+        echo "Database Statistics for '$Database':"
+        echo "---------------------------------"
+        echo
+        echo "Database Size Summary:"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_size"
+        
+        echo
+        echo "Table Statistics (sorted by size):"
+        mysql --defaults-file="$PROFILE" --no-auto-rehash \
+          --table -e "$query_tables"
+      } > "$stats_file"
+      
+      # Use less on the file directly instead of piping
+      less -RS "$stats_file"
+      
+      # Clean up temp file
+      rm -f "$stats_file"
+      
+      # Reset terminal after using less
+      stty sane 2>/dev/null || true
+    else
+      # Direct output without pager
+      echo "Database Statistics for '$Database':"
+      echo "---------------------------------"
+      echo
+      echo "Database Size Summary:"
+      mysql_exec --table -e "$query_size"
+      
+      echo
+      echo "Table Statistics (sorted by size):"
+      mysql_exec --table -e "$query_tables"
+    fi
+  fi
+  
+  return 0
+}
+
 #=============================================================================
 # Main Execution Logic
 # Handles startup, arguments, and interactive command loop
@@ -1236,6 +3008,28 @@ main() {
     if ! read -e -p "$PromptPrefix> " input; then info "EOF detected. Exiting."; echo; break; fi
     input=$(trim "$input"); [[ -z "$input" ]] && continue
     history -s "$input"
+    # Store command in our history array
+    CommandHistory+=("$input")
+    # First check for history recall with !number
+    if [[ "$input" =~ ^![0-9]+$ ]]; then
+      # Extract the history number
+      local history_num="${input:1}"
+      # Check if it's in our tracked history
+      if [[ $history_num -gt 0 && $history_num -le ${#CommandHistory[@]} ]]; then
+        # Get the command from our history (adjust for 0-based array)
+        local history_cmd="${CommandHistory[$((history_num-1))]}"
+        info "Recalling command: $history_cmd"
+        # Set the input to the recalled command and continue processing
+        input="$history_cmd"
+        # Add to history and continue with normal processing
+        CommandHistory+=("$input")
+      else
+        # Let the shell's built-in history expansion handle it
+        info "Using shell history recall"
+        # We'll fall through to shell command handling (!command)
+      fi
+    fi
+    
     # Process input based on first character
     if [[ "$input" =~ ^/ ]]; then
       # Handle slash commands (/command)
@@ -1278,7 +3072,29 @@ main() {
         status)         handle_cmd_status || true ;;
         create)         handle_cmd_create || true ;;
         count)          handle_cmd_count || true ;;
+        # New table exploration commands
+        sample)         handle_cmd_sample "$args" || true ;;
+        primary-key)    handle_cmd_primary_key || true ;;
+        primary_key)    handle_cmd_primary_key || true ;; # Alternative syntax
+        indexes)        handle_cmd_indexes || true ;;
+        find)           handle_cmd_find "$args" || true ;;
+        # Database schema and advanced features
+        schema)         handle_cmd_schema "$args" || true ;;
+        foreign-keys)   handle_cmd_foreign_keys || true ;;
+        foreign_keys)   handle_cmd_foreign_keys || true ;; # Alternative syntax
+        backup)         handle_cmd_backup "$args" || true ;;
+        charset)        handle_cmd_charset || true ;;
+        engines)        handle_cmd_engines || true ;;
+        # Administration and performance
+        whoami)         handle_cmd_whoami || true ;;
+        whois)          handle_cmd_whois "$args" || true ;;
+        users)          handle_cmd_users || true ;;
+        processes)      handle_cmd_processes || true ;;
+        variables)      handle_cmd_variables "$args" || true ;;
+        export)         handle_cmd_export "$args" || true ;;
+        stats)          handle_cmd_stats || true ;;
         # General commands
+        history)        handle_cmd_history "$args" || true ;;
         sql)            handle_cmd_sql "$args" || true ;;
         prompt)         handle_cmd_prompt || true ;;
         # Navigation
