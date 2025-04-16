@@ -2,11 +2,12 @@
 # shellcheck disable=SC2162 # Allow read without -r for backward compatibility
 # dbh - Interactive MySQL client with slash commands, shell access, and direct SQL
 # Features:
-# - Database/table navigation and exploration with /commands
-# - Interactive menus for selecting databases, tables, and columns
-# - Tabular output with paging for wide results
+# - Database/table navigation with /commands
+# - Color-coded interface with custom prompts
+# - Configurable via ~/.config/dbh/config
+# - Command history with readline support
 # - Shell access with ! prefix
-# - Direct SQL execution without prefixes
+# - Direct SQL execution
 set -eEuo pipefail +o histexpand
 shopt -s extglob globstar checkwinsize nocasematch # nocasematch for command parsing
 
@@ -14,6 +15,8 @@ shopt -s extglob globstar checkwinsize nocasematch # nocasematch for command par
 HISTSIZE=1000
 HISTFILESIZE=2000
 shopt -s histappend
+
+declare -x LESS="-FXRS"
 
 # Setup directory and files
 DBH_CONFIG_DIR="$HOME/.config/dbh"
@@ -27,61 +30,34 @@ if [[ ! -d "$DBH_CONFIG_DIR" ]]; then
   mkdir -p "$DBH_CONFIG_DIR" || warn "Could not create directory: $DBH_CONFIG_DIR"
 fi
 
-# Load configuration from file
+# Load user configuration from ~/.config/dbh/config
 load_config() {
   local old_errexit
   old_errexit="$(set +o | grep errexit)"
   set +e
   
   if [[ -r "$DBH_CONFIG_FILE" && -s "$DBH_CONFIG_FILE" ]]; then
-    local line key value
-    local count=0
+    local line key value count=0
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-      # Skip empty lines and comments
       [[ -z "$line" || ${line:0:1} == "#" ]] && continue
       
-      # Parse key=value format
       if [[ "$line" =~ ^([A-Za-z0-9_]+)=(.*)$ ]]; then
         key="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
-        
-        # Remove quotes if present
-        value="${value#\"}"
-        value="${value%\"}"
-        value="${value#\'}"
-        value="${value%\'}"
+        value="${value#[\"\']}"; value="${value%[\"\']}"
         
         case "$key" in
-          DEFAULT_PROFILE)
-            Profile_Default="$value"
-            ((count++))
-            ;;
-          DEFAULT_DATABASE)
-            [[ -z "$Database" ]] && Database="$value"
-            ((count++))
-            ;;
-          DEFAULT_LIMIT)
-            LimitClause="$value"
-            ((count++))
-            ;;
-          MAX_HISTORY)
-            HISTSIZE="$value"
-            HISTFILESIZE="$value"
-            ((count++))
-            ;;
-          PAGER)
-            PAGER="$value"
-            ((count++))
-            ;;
-          # Add more configuration options as needed
+          DEFAULT_PROFILE) Profile_Default="$value"; ((count++)) ;;
+          DEFAULT_DATABASE) [[ -z "$Database" ]] && Database="$value"; ((count++)) ;;
+          DEFAULT_LIMIT) LimitClause="$value"; ((count++)) ;;
+          MAX_HISTORY) HISTSIZE="$value"; HISTFILESIZE="$value"; ((count++)) ;;
+          PAGER) PAGER="$value"; ((count++)) ;;
         esac
       fi
     done < "$DBH_CONFIG_FILE" 2>/dev/null || true
     
     [[ $count -gt 0 && -t 1 ]] && info "Loaded $count configuration settings"
-  elif [[ $DEBUG -eq 1 ]]; then
-    info "No configuration file found, using defaults"
   fi
   
   eval "$old_errexit"
@@ -177,52 +153,38 @@ create_secure_tempfile() {
 
 # MySQL execution wrapper with improved security
 mysql_exec() {
-  # Ensure variables are local and initialized
-  local output="" error="" exit_code=1 # Default to error
+  local output="" error="" exit_code=1
   local out_file err_file
 
-  debug "Executing MySQL command with profile '$PROFILE': $*"
-  
-  # Create secure temp files
+  # Create secure temp files and set cleanup trap
   out_file=$(create_secure_tempfile "${PRG}.out")
   err_file=$(create_secure_tempfile "${PRG}.err")
-  
-  # Ensure cleanup even if function errors out or script exits
   trap 'rm -f "$out_file" "$err_file"; trap - RETURN' RETURN
 
-  debug "Capturing stdout>'$out_file', stderr>'$err_file'"
-  # Execute command directly, using the PROFILE variable from the main scope
+  # Execute command with the profile variable from main scope
+  [[ $DEBUG -eq 1 ]] && debug "MySQL: $*"
   mysql --defaults-file="$PROFILE" --no-auto-rehash "$@" >"$out_file" 2>"$err_file"
   exit_code=$?
-  debug "MySQL command finished, exit_code=$exit_code"
 
-  # Read contents back
+  # Read results and cleanup
   output=$(< "$out_file")
   error=$(< "$err_file")
-
-  # Cleanup handled by trap RETURN
   rm -f "$out_file" "$err_file"
-  trap - RETURN # Disable trap for this function before normal return
+  trap - RETURN
 
-  debug "MySQL exit code: $exit_code"
-  [[ -n "$error" ]] && debug "MySQL stderr: $error"
-  [[ -n "$output" ]] && echo "$output" # Print captured stdout
+  # Output stdout regardless of exit status
+  [[ -n "$output" ]] && echo "$output"
 
-  # Handle functional errors based on exit code and stderr
+  # Handle errors
   if (( exit_code != 0 )); then
-    error "MySQL command failed (Exit Code: $exit_code)" # error() returns 0
     local mysql_err_msg
     mysql_err_msg=$(echo "$error" | sed -n 's/^.*ERROR[[:space:]]*[0-9]*[[:space:]]*(\(.*\)).*:[[:space:]]*\(.*\)/\1: \2/p' | head -n 1)
-    if [[ -n "$mysql_err_msg" ]]; then 
-      error "MySQL Error: $mysql_err_msg"
-    elif [[ -n "$error" ]]; then 
-      error "MySQL Raw Error Output: ${error}"
-    fi
-    return $exit_code # Return non-zero status code
+    [[ -n "$mysql_err_msg" ]] && error "MySQL Error: $mysql_err_msg" ||
+      [[ -n "$error" ]] && error "MySQL Error: ${error}"
+    return $exit_code
   elif [[ -n "$error" ]]; then 
     warn "MySQL produced warnings: ${error}"
   fi
-  # If exit_code was 0, return 0
   return 0
 }
 
@@ -596,21 +558,17 @@ handle_cmd_config() {
       info "Configuration file: $DBH_CONFIG_FILE"
       if [[ -r "$DBH_CONFIG_FILE" && -s "$DBH_CONFIG_FILE" ]]; then
         echo
-        echo "Current configuration:"
-        echo "------------------------"
         grep -v '^#' "$DBH_CONFIG_FILE" 2>/dev/null | grep . || echo "[No settings found]"
       else
         info "No configuration file found. Create one with '/config create'."
       fi
       echo
-      info "Available configuration options:"
-      echo "--------------------------------"
-      echo "DEFAULT_PROFILE   - Default MySQL configuration file path"
-      echo "DEFAULT_DATABASE  - Default database to connect to"
-      echo "DEFAULT_LIMIT     - Default limit for SELECT queries"
-      echo "MAX_HISTORY       - Maximum number of history entries to store"
+      echo "Available options:"
+      echo "DEFAULT_PROFILE   - MySQL config file path (default: ~/.mylocalhost.cnf)"
+      echo "DEFAULT_DATABASE  - Database to connect to on startup"
+      echo "DEFAULT_LIMIT     - Default limit for SELECT queries (default: 100)"
+      echo "MAX_HISTORY       - Maximum history entries (default: 1000)"
       echo "PAGER             - Custom pager program (default: less)"
-      echo
       ;;
       
     create)
@@ -623,40 +581,34 @@ handle_cmd_config() {
       
       cat > "$DBH_CONFIG_FILE" << 'EOF'
 # DBH Configuration File
-# Set your preferences below
 
-# Default MySQL configuration file
+# MySQL configuration file
 DEFAULT_PROFILE=~/.mylocalhost.cnf
 
-# Default database to connect to on startup (if not specified on command line)
+# Default database on startup (uncomment to enable)
 # DEFAULT_DATABASE=mysql
 
 # Default limit for SELECT queries
 DEFAULT_LIMIT=100
 
-# Maximum number of history entries to store
+# Maximum history entries
 MAX_HISTORY=1000
 
-# Pager program (default: less)
+# Pager program
 # PAGER=less -S
 EOF
       chmod 600 "$DBH_CONFIG_FILE"
       info "Configuration file created at $DBH_CONFIG_FILE"
-      info "Edit this file to customize your settings."
       ;;
       
     edit)
       local editor="${EDITOR:-vi}"
       if command -v "$editor" >/dev/null 2>&1; then
-        if [[ ! -f "$DBH_CONFIG_FILE" ]]; then
-          info "Configuration file doesn't exist. Creating a default one..."
-          handle_cmd_config create
-        fi
-        info "Opening configuration file with $editor..."
+        [[ ! -f "$DBH_CONFIG_FILE" ]] && handle_cmd_config create
         "$editor" "$DBH_CONFIG_FILE"
-        info "Configuration updated. Reload with '/config reload'."
+        info "Config updated. Reload with '/config reload'."
       else
-        error "Editor not found. Set the EDITOR environment variable or edit manually at $DBH_CONFIG_FILE"
+        error "Editor not found. Set EDITOR or edit manually at $DBH_CONFIG_FILE"
       fi
       ;;
       
@@ -687,7 +639,13 @@ handle_cmd_help() {
   info "  /command          Slash commands for database operations"
   info "  !command          Shell commands (!alone for interactive shell)"
   info "  SQL               Direct SQL when not starting with / or !"
-  info "  !number           Repeat command from history by number"
+
+  # User Interface
+  info
+  info " User Interface:"
+  info "  Color coding      Prompts, messages, and warnings are color-coded"
+  info "  Context-aware     Prompt shows current database and table selection"
+  info "  Configurable      Customize via ~/.config/dbh/config"
   
   # Database Navigation
   info
@@ -761,16 +719,22 @@ handle_cmd_help() {
   info "  /sql <SQL>        Execute arbitrary SQL"
   info "  /prompt           Open MySQL prompt"
   
-  # Shell Access
+  # Configuration
   info
-  info " Shell Access:"
+  info " Configuration:"
+  info "  /config show      Show current settings from ~/.config/dbh/config"
+  info "  /config create    Create default configuration file"
+  info "  /config edit      Edit configuration in text editor"
+  info "  /config reload    Apply changes after editing config file"
+
+  # Shell Access and History
+  info
+  info " Shell Access and History:"
   info "  !                 Interactive shell (returns to dbh)"
   info "  !command          Execute shell command"
-  info "  !shell command    Alternative syntax"
-  info "  ↑/↓               Use arrow keys to navigate command history"
-  info "  !number           Repeat command from history by number"
-  info "  /history [n]      Show command history (last n entries, persistent across sessions)"
-  info "  /config           Manage configuration settings (show, create, edit, reload)"
+  info "  ↑/↓               Use arrow keys to navigate history"
+  info "  !number           Recall command by history number"
+  info "  /history [n]      Show command history (saved across sessions)"
   
   info "---------------------------------------------------------------"
   return 0
