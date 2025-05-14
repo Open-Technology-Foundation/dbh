@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2162 # Allow read without -r for backward compatibility
-# dbh - Interactive MySQL client with slash commands, shell access, and direct SQL
+#
+# dbh - Interactive MySQL Database Helper (v3.7.1)
+#
+# A powerful, intuitive MySQL database explorer with an interactive command interface,
+# colorized output, and comprehensive database management capabilities.
+#
 # Features:
-# - Database/table navigation with /commands
-# - Color-coded interface with custom prompts
-# - Configurable via ~/.config/dbh/config
-# - Command history with readline support
-# - Shell access with ! prefix
-# - Direct SQL execution
+# - Interactive hierarchical database/table navigation with /commands
+# - Color-coded interface with context-aware prompts
+# - Query building with columnar selection and filtering
+# - SQL execution and formatting with secure parameter handling
+# - Shell command access with ! prefix while maintaining context
+# - Configuration system via ~/.config/dbh/config
+# - Persistent command history with readline/arrow key support
+# - Database schema exploration and visualization
+# - Table structure and relationship analysis
+# - Export capabilities (CSV, SQL, JSON formats)
+# - Security features including SQL injection prevention
+#
+# Copyright (C) 2023-2025 Open Technology Foundation
+# License: GNU General Public License v3.0 (GPL-3.0)
+# Repository: https://github.com/Open-Technology-Foundation/dbh
+#
+# Usage: dbh [Options] [database [table [command]]]
+# See /help for detailed command information
 set -eEuo pipefail +o histexpand
 shopt -s extglob globstar checkwinsize nocasematch # nocasematch for command parsing
 
@@ -31,6 +48,17 @@ if [[ ! -d "$DBH_CONFIG_DIR" ]]; then
 fi
 
 # Load user configuration from ~/.config/dbh/config
+# 
+# Reads and processes the user's configuration file, supporting the following settings:
+# - DEFAULT_PROFILE: Path to MySQL configuration file
+# - DEFAULT_DATABASE: Initial database to connect to (if not specified on command line)
+# - DEFAULT_LIMIT: Default limit for SELECT queries (default: 100)
+# - MAX_HISTORY: Maximum number of history entries to store
+# - PAGER: Custom pager program for large outputs
+#
+# This function safely handles errors by temporarily disabling errexit mode
+# and restoring it afterward. Empty config files and missing config files are
+# handled gracefully.
 load_config() {
   local old_errexit
   old_errexit="$(set +o | grep errexit)"
@@ -40,13 +68,17 @@ load_config() {
     local line key value count=0
     
     while IFS= read -r line || [[ -n "$line" ]]; do
+      # Skip empty lines and comments
       [[ -z "$line" || ${line:0:1} == "#" ]] && continue
       
+      # Parse key=value pairs with regex
       if [[ "$line" =~ ^([A-Za-z0-9_]+)=(.*)$ ]]; then
         key="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
+        # Remove surrounding quotes if present
         value="${value#[\"\']}"; value="${value%[\"\']}"
         
+        # Apply configuration settings based on key
         case "$key" in
           DEFAULT_PROFILE) Profile_Default="$value"; ((count++)) ;;
           DEFAULT_DATABASE) [[ -z "$Database" ]] && Database="$value"; ((count++)) ;;
@@ -57,9 +89,11 @@ load_config() {
       fi
     done < "$DBH_CONFIG_FILE" 2>/dev/null || true
     
+    # Inform user about loaded settings (only if interactive)
     [[ $count -gt 0 && -t 1 ]] && info "Loaded $count configuration settings"
   fi
   
+  # Restore original errexit state
   eval "$old_errexit"
   return 0
 }
@@ -123,14 +157,38 @@ decp() { declare -p "$@" | sed 's/^declare -[a-zA-Z-]* //'; }
 trim() { local v="$*"; v="${v#"${v%%[![:blank:]]*}"}"; echo -n "${v%"${v##*[![:blank:]]}"}"; }
 
 # Function to safely quote SQL identifiers
+# 
+# Properly escapes a MySQL identifier (table name, column name, etc.) by:
+# 1. Surrounding it with backticks to handle reserved words and special characters
+# 2. Escaping any backticks within the identifier by doubling them
+#
+# This is CRITICAL for SQL injection prevention when using user-provided identifiers
+# in SQL statements.
+#
+# Args:
+#   $1 - The SQL identifier to quote (table name, column name, etc.)
+# Returns:
+#   The properly quoted identifier
 quote_ident() { 
   local ident="$1"
-  # Double backticks within identifiers
+  # Double backticks within identifiers (MySQL's escaping rule for identifiers)
   ident="${ident//\`/\`\`}"
   echo "\`$ident\`"
 }
 
-# Function to safely escape values for SQL WHERE clauses
+# Function to safely escape values for SQL WHERE clauses and other string contexts
+# 
+# Properly escapes a string value to prevent SQL injection by:
+# 1. Replacing single quotes with two single quotes (SQL standard escaping)
+# 2. Surrounding the result with single quotes
+#
+# This is CRITICAL for SQL injection prevention when using user-provided values
+# in SQL statements.
+#
+# Args:
+#   $1 - The string value to escape
+# Returns:
+#   The properly escaped and quoted string value
 escape_sql_value() {
   local value="$1"
   # Replace single quotes with two single quotes (SQL standard escaping)
@@ -138,20 +196,54 @@ escape_sql_value() {
   echo "'$value'"
 }
 
-# Create random temp file with secure permissions
+# Create a random temporary file with secure permissions
+# 
+# Creates a temporary file with restrictive permissions (only readable/writable
+# by the current user) to prevent information leakage or unauthorized access.
+#
+# Uses the system's temporary directory or falls back to /tmp if needed.
+# Applies 0600 permissions (user read/write only).
+#
+# Args:
+#   $1 - Prefix for the temporary file name
+# Returns:
+#   The path to the created temporary file
 create_secure_tempfile() {
   local prefix="$1"
   local tmp_dir="${TMPDIR:-/tmp}"
+  
+  # Fall back to /tmp if the specified temp directory doesn't exist or isn't writable
   [[ -d "$tmp_dir" && -w "$tmp_dir" ]] || tmp_dir="/tmp"
   
-  # Create temp file with restrictive permissions
+  # Create temp file with a unique name
   local temp_file
   temp_file=$(TMPDIR="$tmp_dir" mktemp "${prefix}.XXXXXXXXXX")
+  
+  # Apply restrictive permissions - only owner can read/write
   chmod 0600 "$temp_file"
+  
+  # Return the path to the created file
   echo "$temp_file"
 }
 
 # MySQL execution wrapper with improved security
+#
+# A secure wrapper around the MySQL client that:
+# 1. Uses secure temporary files for output redirection
+# 2. Properly captures and formats error messages
+# 3. Handles cleanup with traps
+# 4. Uses the selected MySQL profile
+# 5. Formats error messages in a user-friendly way
+#
+# All MySQL operations should use this function to ensure consistent
+# security and error handling throughout the application.
+#
+# Args:
+#   $@ - Arguments to pass to the MySQL client
+# Returns:
+#   MySQL command output on success, error message on failure
+# Exit codes:
+#   MySQL client exit code is preserved and returned
 mysql_exec() {
   local output="" error="" exit_code=1
   local out_file err_file
@@ -177,18 +269,36 @@ mysql_exec() {
 
   # Handle errors
   if (( exit_code != 0 )); then
+    # Parse and format MySQL error messages for better readability
     local mysql_err_msg
     mysql_err_msg=$(echo "$error" | sed -n 's/^.*ERROR[[:space:]]*[0-9]*[[:space:]]*(\(.*\)).*:[[:space:]]*\(.*\)/\1: \2/p' | head -n 1)
+    
+    # Display appropriate error message
     [[ -n "$mysql_err_msg" ]] && error "MySQL Error: $mysql_err_msg" ||
       [[ -n "$error" ]] && error "MySQL Error: ${error}"
+    
     return $exit_code
   elif [[ -n "$error" ]]; then 
+    # Handle warnings (non-fatal errors)
     warn "MySQL produced warnings: ${error}"
   fi
+  
   return 0
 }
 
-# MySQL execution - Direct to TTY for display (used by /select)
+# MySQL execution with direct terminal output for interactive display
+#
+# Unlike mysql_exec, this function lets MySQL output directly to the 
+# terminal for better formatting with tables and interactive paging.
+# Used for SELECT statements and other queries where formatted output
+# is important for readability.
+#
+# Args:
+#   $1 - Database name to use
+#   $@ - Additional arguments to pass to MySQL
+# Returns:
+#   0 on success, non-zero on failure
+#   Output goes directly to the terminal
 mysql_run_display() {
   # Expects DB name as $1, then mysql arguments (like -e "SQL")
   local db_name="$1"
@@ -197,6 +307,7 @@ mysql_run_display() {
   debug "Executing MySQL display command with profile '$PROFILE' for DB '$db_name': $*"
   
   # Execute directly, letting output go to terminal
+  # This allows for proper table formatting and interactive display
   mysql --defaults-file="$PROFILE" --no-auto-rehash "$db_name" "$@"
   local exit_code=$?
   debug "MySQL display command finished, exit_code=$exit_code"
@@ -258,7 +369,7 @@ handle_shell_command() {
 # --- End Helpers & Command Handlers ---
 
 # --- Global Variables & State Management ---
-declare -x Profile_Default="$HOME/.mylocalhost.cnf"
+declare -x Profile_Default="${HOME}/.mylocalhost.cnf"
 declare -xg PROFILE='' Database='' DataTable='' PAGER=''
 # State for building SELECT queries
 declare -ga SelectedColumns=('*') # Array of column names, default '*'
@@ -328,6 +439,56 @@ save_history() {
   return 0
 }
 # --- End Globals ---
+
+# --- Context Validation Helpers ---
+# 
+# These helper functions are used to check the current database and table context
+# and provide consistent error messaging throughout the application.
+#
+# Using these helpers instead of direct checks reduces code duplication
+# and ensures consistent user feedback.
+
+# Validate that a database is selected
+#
+# Args:
+#   $1 - Optional: Alternative error message
+# Returns:
+#   0 if database is selected, 1 otherwise
+# Side effects:
+#   Prints error message if no database is selected
+require_database() {
+  local custom_error="$1"
+  
+  if [[ -z "$Database" ]]; then
+    error "${custom_error:-"No database selected. Use /database first."}"
+    return 1
+  fi
+  
+  return 0
+}
+
+# Validate that a table is selected
+#
+# Args:
+#   $1 - Optional: Alternative error message
+# Returns:
+#   0 if table is selected, 1 otherwise (also fails if no database is selected)
+# Side effects:
+#   Prints error message if no database or table is selected
+require_table() {
+  local custom_error="$1"
+  
+  # First check database context
+  require_database || return 1
+  
+  if [[ -z "$DataTable" ]]; then
+    error "${custom_error:-"No table selected. Use /table first."}"
+    return 1
+  fi
+  
+  return 0
+}
+# --- End Context Validation Helpers ---
 
 # --- Cleanup ---
 xcleanup() {
@@ -448,8 +609,28 @@ EOT
 # Database and Table Context Management
 # Handles selection, validation, and context switching
 #=============================================================================
+# The context management system is a core component of dbh that maintains
+# the current database and table selection state. It provides hierarchical
+# navigation with proper validation and security checks.
 
-# Sets the database context, clears table, updates prompt
+# Sets the database context, clears table selection, and updates prompt
+#
+# This function sets the current working database context after validating
+# that the database exists and is accessible. It updates the prompt to show
+# the current context and triggers a table listing for the new database.
+#
+# Security note: Uses proper SQL injection prevention techniques with
+# quote_ident() for safe database name handling.
+#
+# Args:
+#   $1 - Database name to select
+# Returns:
+#   0 on success, 1 on failure (database doesn't exist or access denied)
+# Side effects:
+#   - Sets the global Database variable
+#   - Clears the DataTable variable
+#   - Updates the PromptPrefix
+#   - Shows available tables if database changed
 set_database_context() {
   local db_name="$1"
   local db_check_status=0
@@ -458,7 +639,7 @@ set_database_context() {
   local quoted_db_name
   quoted_db_name=$(quote_ident "$db_name")
   
-  # Check if database exists and is accessible
+  # Check if database exists and is accessible by attempting to USE it
   mysql_exec -e "USE ${quoted_db_name};" >/dev/null 2>&1 || db_check_status=$?
   
   if (( db_check_status == 0 )); then
@@ -467,8 +648,8 @@ set_database_context() {
     
     # Set new database context
     Database="$db_name"
-    DataTable="" 
-    PromptPrefix="[dbh:$Database]"
+    DataTable="" # Clear table selection when database changes
+    PromptPrefix="[dbh:$Database]" # Update prompt to show current context
     success "Using database '$Database'."
     
     # If database has changed, show tables menu
@@ -480,6 +661,7 @@ set_database_context() {
     
     return 0
   else
+    # Database not accessible, reset context
     Database=""
     DataTable=""
     PromptPrefix="[dbh]"
@@ -488,58 +670,107 @@ set_database_context() {
   fi
 }
 
-# Sets the table context, updates prompt
+# Sets the table context and updates prompt
+#
+# This function sets the current working table context after validating
+# that the table exists in the current database. It updates the prompt to
+# show the current database and table context.
+#
+# Security note: Uses proper SQL injection prevention with escape_sql_value()
+# for safe table name handling.
+#
+# Args:
+#   $1 - Table name to select
+# Returns:
+#   0 on success, 1 on failure (no database selected, table doesn't exist)
+# Side effects:
+#   - Sets the global DataTable variable
+#   - Updates the PromptPrefix
 set_table_context() {
   local table_name="$1"
   
-  # Verify database context
+  # Verify database context exists before setting table
   if [[ -z "$Database" ]]; then
     error "No database selected. Use /database first."
     return 1
   fi
   
-  # Safe escape for LIKE pattern
-  local escaped_table_name
-  escaped_table_name=$(escape_sql_value "$table_name")
-  escaped_table_name=${escaped_table_name//\%/\\%} # Escape % in LIKE
-  escaped_table_name=${escaped_table_name//_/\\_} # Escape _ in LIKE
-  
-  # Remove the outer quotes and readd them for LIKE syntax
-  escaped_table_name="${escaped_table_name:1:-1}"
-  
+  # Safely escape table name for use in SQL queries
   local table_check_status=0
   local check_output
   
-  # Check if table exists
-  check_output=$(mysql_exec "$Database" -Nse "SELECT table_name FROM information_schema.tables WHERE table_schema = $(escape_sql_value "$Database") AND table_name = $(escape_sql_value "$table_name") LIMIT 1;") || table_check_status=$?
+  # Check if table exists using information_schema to prevent direct manipulation
+  check_output=$(mysql_exec "$Database" -Nse "SELECT table_name FROM information_schema.tables 
+                                             WHERE table_schema = $(escape_sql_value "$Database") 
+                                             AND table_name = $(escape_sql_value "$table_name") 
+                                             LIMIT 1;") || table_check_status=$?
   
   if (( table_check_status != 0 )) || [[ -z "$check_output" ]]; then
     error "Table '$table_name' not found in database '$Database'."
     return 1
   else
+    # Table exists, set context
     DataTable="$table_name"
-    PromptPrefix="[dbh:$Database:$DataTable]"
+    PromptPrefix="[dbh:$Database:$DataTable]" # Update prompt with database and table
     success "Using table '$DataTable'."
     return 0
   fi
 }
 
-# Go back one context level
+# Go back one context level in the navigation hierarchy
+#
+# This function implements a "back" navigation command that moves up
+# in the context hierarchy: Table -> Database -> Top Level.
+#
+# Args:
+#   None
+# Returns:
+#   Always returns 0 (success)
+# Side effects:
+#   - May clear DataTable or Database variables
+#   - Updates the PromptPrefix accordingly
 go_back_context() {
-  if [[ -n "$DataTable" ]]; then DataTable=""; PromptPrefix="[dbh:$Database]"; info "Returned to database '$Database'."
-  elif [[ -n "$Database" ]]; then Database=""; PromptPrefix="[dbh]"; info "Returned to top level."
-  else info "Already at the top level. Use /q to quit."; fi
+  if [[ -n "$DataTable" ]]; then 
+    # If table is selected, go back to database level
+    DataTable=""
+    PromptPrefix="[dbh:$Database]"
+    info "Returned to database '$Database'."
+  elif [[ -n "$Database" ]]; then 
+    # If database is selected but no table, go back to top level
+    Database=""
+    PromptPrefix="[dbh]"
+    info "Returned to top level."
+  else 
+    # Already at top level
+    info "Already at the top level. Use /q to quit."
+  fi
   return 0
 }
 
-# Display current SELECT state
+# Display current SELECT query state
+#
+# Shows the current state of the SELECT query being built, including
+# database, table, columns, WHERE, ORDER BY, and LIMIT clauses.
+#
+# Args:
+#   None
+# Returns:
+#   Always returns 0 (success)
+# Side effects:
+#   Displays the current query state information to the user
 show_select_state() {
   info "--- Current SELECT State ---"
-  info " Database: ${Database:-<None>}"; info " Table:  ${DataTable:-<None>}"
+  info " Database: ${Database:-<None>}"
+  info " Table:    ${DataTable:-<None>}"
+  
+  # Format column list for display
   local cols_display="${SelectedColumns[*]}"
   [[ "$cols_display" == "*" ]] || cols_display=$(IFS=,; echo "${SelectedColumns[*]}")
-  info " Columns: $cols_display"; info " WHERE:   ${WhereClause:-<None>}"
-  info " ORDER BY: ${OrderClause:-<None>} $OrderDirection"; info " LIMIT:   ${LimitClause:-<None>}"
+  
+  info " Columns:  $cols_display"
+  info " WHERE:    ${WhereClause:-<None>}"
+  info " ORDER BY: ${OrderClause:-<None>} $OrderDirection"
+  info " LIMIT:    ${LimitClause:-<None>}"
   info "----------------------------"
   return 0
 }
@@ -547,6 +778,18 @@ show_select_state() {
 #=============================================================================
 # Interactive Command Handlers
 # Processes /commands, !shell commands, and direct SQL
+#=============================================================================
+# The command handlers are the core functionality of dbh, each implementing a
+# specific operation that the user can invoke with a /<command> syntax.
+#
+# Each handler follows a consistent pattern:
+# - Function name: handle_cmd_<command>
+# - Return values: 0 for success, non-zero for failure
+# - Error handling: Reports errors via error() function
+# - Context checking: Verifies appropriate database/table context as needed
+#
+# Security is prioritized throughout, with all user inputs properly escaped
+# before being used in SQL statements via quote_ident() and escape_sql_value().
 #=============================================================================
 
 handle_cmd_config() {
@@ -808,10 +1051,7 @@ handle_cmd_database() {
 }
 
 handle_cmd_tables() {
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
+  require_database || return 1
   
   local tbl REPLY PS3
   local -a tables
@@ -875,22 +1115,15 @@ handle_cmd_tables() {
 }
 
 handle_cmd_table() {
-  local table_name="$1"; [[ -z "$Database" ]] && { error "No database selected. Use /database first."; return 1; }
+  local table_name="$1"
+  require_database || return 1
   [[ -z "$table_name" ]] && { error "Usage: /table <table_name>"; return 1; }
   set_table_context "$table_name"; return $?
 }
 
 handle_cmd_columns() {
-  # First, verify we have a database and table selected
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
-  
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  # Verify we have a database and table selected
+  require_table || return 1
   
   # Handle direct input from arguments if provided
   local cols_str="$*"
@@ -1099,15 +1332,7 @@ handle_cmd_asc_desc() {
 
 handle_cmd_select() {
   # Verify context requirements
-  if [[ -z "$Database" ]]; then
-    error "No database selected (/database)."
-    return 1
-  fi
-  
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected (/table)."
-    return 1
-  fi
+  require_table "No table selected (/table)." || return 1
   
   # Build SQL query safely
   local sql="SELECT "
@@ -1186,10 +1411,7 @@ handle_cmd_select() {
 }
 
 handle_cmd_desc() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   info "Structure for '$Database.$DataTable':"
   mysql_exec "$Database" -e "DESCRIBE $(quote_ident "$DataTable");" || return 1
@@ -1197,10 +1419,7 @@ handle_cmd_desc() {
 }
 
 handle_cmd_structure() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   local format="$1"
   local quoted_table
@@ -1249,10 +1468,7 @@ handle_cmd_structure() {
 }
 
 handle_cmd_status() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   info "Status for '$Database.$DataTable':"
   mysql_exec "$Database" -e "SHOW TABLE STATUS WHERE Name = $(escape_sql_value "$DataTable")\G" || return 1
@@ -1260,10 +1476,7 @@ handle_cmd_status() {
 }
 
 handle_cmd_create() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   info "CREATE TABLE statement for '$Database.$DataTable':"
   local create_statement
@@ -1280,10 +1493,7 @@ handle_cmd_create() {
 }
 
 handle_cmd_count() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   local count
   count=$(mysql_exec "$Database" -Nse "SELECT COUNT(*) FROM $(quote_ident "$DataTable");") || return 1
@@ -1294,10 +1504,7 @@ handle_cmd_count() {
 handle_cmd_sql() {
   local sql_command="$*"
   
-  if [[ -z "$Database" ]]; then
-    error "No database selected (/database)."
-    return 1
-  fi
+  require_database "No database selected (/database)." || return 1
   
   if [[ -z "$sql_command" ]]; then
     error "Usage: /sql <SQL query...>"
@@ -1322,7 +1529,7 @@ handle_cmd_sql() {
 }
 
 handle_cmd_prompt() {
-  [[ -z "$Database" ]] && { error "No database selected (/database)."; return 1; }
+  require_database "No database selected (/database)." || return 1
   info "Launching interactive MySQL prompt for database '$Database'..."; info "Type 'exit' or 'quit' to return to $PRG."; stty sane
   if ! mysql --defaults-file="$PROFILE" --no-auto-rehash --prompt="[$PRG:$Database] mysql> " "$Database"; then error "MySQL interactive session exited."; fi
   stty sane; clear; info "Returned to $PRG. Current context: $PromptPrefix"; bind '"\e[0n": redraw-current-line'; printf '\e[0n' > /dev/tty; return 0
@@ -1330,10 +1537,7 @@ handle_cmd_prompt() {
 
 # Display sample rows from the current table
 handle_cmd_sample() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
 
   local num_rows="10" # Default number of rows
   local quoted_table
@@ -1373,10 +1577,7 @@ handle_cmd_sample() {
 
 # Show primary key information for the current table
 handle_cmd_primary_key() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   info "Primary key for '$Database.$DataTable':"
   
@@ -1409,10 +1610,7 @@ handle_cmd_primary_key() {
 
 # Show all indexes for the current table
 handle_cmd_indexes() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   info "Indexes for '$Database.$DataTable':"
   
@@ -1444,10 +1642,7 @@ handle_cmd_indexes() {
 
 # Search table data for specific text
 handle_cmd_find() {
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   local search_text="$*"
   if [[ -z "$search_text" ]]; then
@@ -1565,10 +1760,7 @@ handle_cmd_history() {
 
 # Show database schema with table relationships
 handle_cmd_schema() {
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
+  require_database || return 1
   
   local format="$1"
   local vertical_format=0
@@ -1797,10 +1989,7 @@ handle_cmd_backup() {
   local current_time
   current_time=$(date +"%Y%m%d_%H%M%S")
   
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
+  require_database || return 1
   
   # Determine what to backup (table or database)
   local backup_type="database"
@@ -2618,15 +2807,7 @@ handle_cmd_variables() {
 
 # Export query results to a file
 handle_cmd_export() {
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
-  
-  if [[ -z "$DataTable" ]]; then
-    error "No table selected. Use /table first."
-    return 1
-  fi
+  require_table || return 1
   
   # Parse arguments safely
   local filename=""
@@ -2869,10 +3050,7 @@ handle_cmd_export() {
 
 # Show database/table statistics and metrics
 handle_cmd_stats() {
-  if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
-    return 1
-  fi
+  require_database || return 1
   
   # Check if less is available for paging
   local use_pager=0
@@ -3058,11 +3236,31 @@ handle_cmd_stats() {
 # Main Execution Logic
 # Handles startup, arguments, and interactive command loop
 #=============================================================================
+# The main function is the entry point for the dbh utility and orchestrates
+# the entire application flow. It handles:
+#
+# 1. Configuration loading and initialization
+# 2. Command-line argument parsing
+# 3. MySQL profile validation and connection checking
+# 4. Initial database/table context setup
+# 5. Command history management
+# 6. Interactive command loop with input processing
+# 7. Command dispatching to appropriate handlers
+#
+# The interactive loop processes user input and dispatches commands based on
+# the input's first character:
+# - / → Slash command (database operations)
+# - ! → Bang command (shell operations)
+# - Other → Direct SQL execution
+#
+# Security is enforced through proper parameter handling, error checking,
+# and the use of secure helper functions for all operations.
+#=============================================================================
 main() {
   # --- Configuration & Initialization ---
   local -i InteractiveMode=1
   
-  # Load configuration
+  # Load user configuration from ~/.config/dbh/config
   load_config
   
   while (($#)); do 
@@ -3139,7 +3337,12 @@ main() {
   
   # Try relative path if profile not found and path isn't absolute
   if ! [[ -f "$PROFILE" ]] && [[ "$PROFILE" != /* ]]; then
-    if [[ -f "$PRGDIR/$PROFILE" ]]; then
+    # Expand tilde if present
+    if [[ "$PROFILE" == \~* ]]; then
+      PROFILE="${HOME}${PROFILE:1}"
+      debug "Expanded tilde in profile path: $PROFILE"
+    # Try relative to program directory
+    elif [[ -f "$PRGDIR/$PROFILE" ]]; then
       PROFILE="$PRGDIR/$PROFILE"
       debug "Found profile at relative path: $PROFILE"
     fi
