@@ -26,7 +26,7 @@
 # Usage: dbh [Options] [database [table [command]]]
 # See /help for detailed command information
 set -eEuo pipefail +o histexpand
-shopt -s extglob globstar checkwinsize nocasematch inherit_errexit
+shopt -s extglob globstar checkwinsize inherit_errexit
 
 # --- Config & History Setup ---
 declare -i HISTSIZE=1000
@@ -1334,7 +1334,7 @@ handle_cmd_limit() {
 }
 
 handle_cmd_asc_desc() {
-  local direction="$1"; if [[ "$direction" == 'desc' ]]; then OrderDirection='DESC'; info 'ORDER BY direction set to DESC.'; else OrderDirection='ASC'; info 'ORDER BY direction set to ASC.'; fi
+  local direction="$1"; if [[ "${direction,,}" == 'desc' ]]; then OrderDirection='DESC'; info 'ORDER BY direction set to DESC.'; else OrderDirection='ASC'; info 'ORDER BY direction set to ASC.'; fi
   show_select_state; return 0
 }
 
@@ -2873,16 +2873,10 @@ handle_cmd_export() {
     filename="${Database}_${DataTable}_${current_time}.${format}"
   fi
   
-  # Validate format
+  # Normalize format to lowercase and validate
+  format="${format,,}"
   case "$format" in
-    csv|CSV)
-      format='csv'
-      ;;
-    sql|SQL)
-      format='sql'
-      ;;
-    json|JSON)
-      format='json'
+    csv|sql|json)
       ;;
     *)
       error "Unsupported format: $format. Use csv, sql, or json."
@@ -3276,7 +3270,6 @@ main() {
         PROFILE=$1
         ;;
       -V|--version)
-        # Must come before -v due to nocasematch
         echo "$SCRIPT_NAME $VERSION"
         exit 0
         ;;
