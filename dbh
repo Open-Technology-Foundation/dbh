@@ -95,7 +95,7 @@ load_config() {
   fi
 
   # Restore original errexit state
-  ((old_errexit==0)) || set -e
+  ((old_errexit)) || set -e
   return 0
 }
 
@@ -362,7 +362,7 @@ handle_shell_command() {
   # Restore terminal state
   stty "$saved_stty" 2>/dev/null || true
   
-  if (( exit_code == 0 )); then
+  if ! ((exit_code)); then
     info "Shell session completed. Returned to $SCRIPT_NAME."
   else
     warn "Shell exited with status $exit_code. Returned to $SCRIPT_NAME."
@@ -412,7 +412,7 @@ load_history() {
     info 'No history file found'
   fi
 
-  ((old_errexit==0)) || set -e
+  ((old_errexit)) || set -e
   return 0
 }
 
@@ -423,7 +423,7 @@ save_history() {
   set +e
 
   if [[ -d "$DBH_CONFIG_DIR" ]]; then
-    if ((${#CommandHistory[@]}==0)); then
+    if ! ((${#CommandHistory[@]})); then
       ((old_errexit)) && set -e
       return 0
     fi
@@ -431,7 +431,7 @@ save_history() {
     local -i result=0
     printf "%s\n" "${CommandHistory[@]}" 2>/dev/null > "$DBH_HISTORY_FILE" || result=$?
 
-    if ((result==0)); then
+    if ! ((result)); then
       chmod 600 "$DBH_HISTORY_FILE" 2>/dev/null || true
       if [[ -f "$HISTFILE" ]]; then
         chmod 600 "$HISTFILE" 2>/dev/null || true
@@ -443,7 +443,7 @@ save_history() {
     warn "Could not save history: Directory $DBH_CONFIG_DIR missing"
   fi
 
-  ((old_errexit==0)) || set -e
+  ((old_errexit)) || set -e
   return 0
 }
 # --- End Globals ---
@@ -609,7 +609,7 @@ Examples:
   [dbh:mydb:users]> /q
 
 HELP
-  (($#==0)) || exit "${1:-0}"
+  (($#)) && exit "${1:-0}"
   return 0
 }
 
@@ -650,7 +650,7 @@ set_database_context() {
   # Check if database exists and is accessible by attempting to USE it
   mysql_exec -e "USE ${quoted_db_name};" >/dev/null 2>&1 || db_check_status=$?
   
-  if (( db_check_status == 0 )); then
+  if ! ((db_check_status)); then
     # Store previous database to check if it changed
     local previous_db="$Database"
     
@@ -713,7 +713,7 @@ set_table_context() {
                                              AND table_name = $(escape_sql_value "$table_name") 
                                              LIMIT 1;") || table_check_status=$?
   
-  if (( table_check_status != 0 )) || [[ -z "$check_output" ]]; then
+  if ((table_check_status)) || [[ -z "$check_output" ]]; then
     error "Table ${table_name@Q} not found in database ${Database@Q}"
     return 1
   else
@@ -1161,7 +1161,7 @@ handle_cmd_columns() {
       done
       
       # Check if we have any valid columns
-      if ((${#SelectedColumns[@]} == 0)); then
+      if ! ((${#SelectedColumns[@]})); then
         error 'Invalid column input. Setting back to *.'
         SelectedColumns=('*')
         return 1
@@ -1245,7 +1245,7 @@ handle_cmd_columns() {
       [0-9]*) 
         # Convert to zero-based index
         local idx=$((REPLY-1))
-        if [[ $idx -lt 0 || $idx -ge ${#available_columns[@]} ]]; then
+        if ((idx < 0 || idx >= ${#available_columns[@]})); then
           warn "Invalid selection: $REPLY"
           continue
         fi
@@ -1264,9 +1264,9 @@ handle_cmd_columns() {
           fi
         done
         
-        if [[ $found -eq 0 ]]; then
+        if ! ((found)); then
           # Special case for "* (All columns)" - clear other selections
-          if [[ $idx -eq 0 ]]; then
+          if ! ((idx)); then
             selected_indices=(0)
             info "Selected all columns (*)"
           else
@@ -1289,14 +1289,14 @@ handle_cmd_columns() {
   tabs -8
   
   # No selection means select all columns
-  if [[ ${#selected_indices[@]} -eq 0 ]]; then
+  if ! ((${#selected_indices[@]})); then
     SelectedColumns=('*')
     info 'No columns selected, defaulting to all columns (*)'
   else
     # Process the selections into actual column names
     SelectedColumns=()
     for idx in "${selected_indices[@]}"; do
-      if [[ $idx -eq 0 ]]; then
+      if ! ((idx)); then
         # Special case for "* (All columns)"
         SelectedColumns=('*')
         break
@@ -1318,17 +1318,17 @@ handle_cmd_columns() {
 }
 
 handle_cmd_where() {
-  local where_input="$*"; if [[ $# -eq 0 ]]; then prompt "WHERE clause (blank to clear): "; read -e -i "$WhereClause" where_input; where_input=$(trim "$where_input"); fi
+  local where_input="$*"; if ! (($#)); then prompt "WHERE clause (blank to clear): "; read -e -i "$WhereClause" where_input; where_input=$(trim "$where_input"); fi
   WhereClause="$where_input"; info "WHERE clause set to: ${WhereClause:-<None>}"; show_select_state; return 0
 }
 
 handle_cmd_order() {
-  local order_input="$*"; if [[ $# -eq 0 ]]; then prompt "ORDER BY column(s) (blank to clear): "; read -e -i "$OrderClause" order_input; order_input=$(trim "$order_input"); fi
+  local order_input="$*"; if ! (($#)); then prompt "ORDER BY column(s) (blank to clear): "; read -e -i "$OrderClause" order_input; order_input=$(trim "$order_input"); fi
   OrderClause="$order_input"; info "ORDER BY clause set to: ${OrderClause:-<None>}"; show_select_state; return 0
 }
 
 handle_cmd_limit() {
-  local limit_input=''; if [[ $# -eq 1 && -n "$1" ]]; then limit_input="$1"; elif [[ $# -ne 1 ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); elif [[ $# -eq 1 && -z "$1" ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); fi
+  local limit_input=''; if (($# == 1)) && [[ -n "$1" ]]; then limit_input="$1"; elif (($# != 1)); then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); elif (($# == 1)) && [[ -z "$1" ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); fi
   if [[ -z "$limit_input" ]]; then LimitClause=''; info 'LIMIT cleared.'; elif [[ "$limit_input" =~ ^[0-9]+$ ]]; then LimitClause="$limit_input"; info "LIMIT set to: $LimitClause"; else error "Invalid LIMIT value '$limit_input'. Must be a positive number."; return 1; fi
   show_select_state; return 0
 }
@@ -1605,14 +1605,14 @@ handle_cmd_primary_key() {
   result=$(mysql_exec "$Database" --table -e "$query")
   local exit_code=$?
   
-  if (( exit_code == 0 )); then
+  if ! ((exit_code)); then
     if [[ -z "$result" ]]; then
       info "No primary key defined for table ${DataTable@Q}"
     else
       echo "$result"
     fi
   fi
-  
+
   return $exit_code
 }
 
@@ -1675,7 +1675,7 @@ handle_cmd_find() {
   local columns
   mapfile -t columns < <(echo "$column_list" | awk '{print $1}')
   
-  if [[ ${#columns[@]} -eq 0 ]]; then
+  if ! ((${#columns[@]})); then
     error "No columns found in table ${DataTable@Q}"
     return 1
   fi
@@ -1741,7 +1741,7 @@ handle_cmd_history() {
   fi
   
   # Use the built-in history command if no CommandHistory array
-  if [[ ${#CommandHistory[@]} -eq 0 ]]; then
+  if ! ((${#CommandHistory[@]})); then
     info "No command history found."
     # Use built-in bash history command as fallback
     history "$count"
@@ -2830,7 +2830,7 @@ handle_cmd_export() {
   # Check for format flag first
   for ((i=0; i<${#args[@]}; i+=1)); do
     if [[ "${args[$i]}" == "--format" ]]; then
-      if [[ $((i+1)) -lt ${#args[@]} ]]; then
+      if ((i+1 < ${#args[@]})); then
         format="${args[$((i+1))]}"
         # Remove these arguments
         args=("${args[@]:0:$i}" "${args[@]:$((i+2))}")
@@ -2852,7 +2852,7 @@ handle_cmd_export() {
   # Check for delimiter flag
   for ((i=0; i<${#args[@]}; i+=1)); do
     if [[ "${args[$i]}" == "--delimiter" ]]; then
-      if [[ $((i+1)) -lt ${#args[@]} ]]; then
+      if ((i+1 < ${#args[@]})); then
         delimiter="${args[$((i+1))]}"
         # Remove these arguments
         args=("${args[@]:0:$i}" "${args[@]:$((i+2))}")
@@ -2862,7 +2862,7 @@ handle_cmd_export() {
   done
   
   # First argument (if any) is now the filename
-  if [[ ${#args[@]} -gt 0 ]]; then
+  if ((${#args[@]})); then
     filename="${args[0]}"
   fi
   
@@ -3012,7 +3012,7 @@ handle_cmd_export() {
       echo "[" > "$filename"
       local line_count=0
       while IFS=$'\t' read -r -a values; do
-        if (( line_count > 0 )); then
+        if ((line_count)); then
           echo "," >> "$filename"
         fi
         echo -n "  {" >> "$filename"
@@ -3020,7 +3020,7 @@ handle_cmd_export() {
         local -i field_count=0
         for i in "${!values[@]}"; do
           if ((i < ${#columns[@]})); then
-            if (( field_count > 0 )); then
+            if ((field_count)); then
               echo -n "," >> "$filename"
             fi
             # Properly escape JSON field value
@@ -3363,28 +3363,28 @@ main() {
     resolved_profile=$(realpath -m -q -- "$PROFILE" 2>/dev/null)
     resolve_status=$?
     
-    if (( resolve_status != 0 )); then
+    if ((resolve_status)); then
       warn "Could not resolve profile path with realpath ${profile_path@Q}"
     else
       debug "Resolved profile path using realpath ${resolved_profile@Q}"
     fi
   fi
-  
+
   # Fall back to readlink if realpath failed or wasn't available
-  if (( resolve_status != 0 )) && command -v readlink >/dev/null; then
+  if ((resolve_status)) && command -v readlink >/dev/null; then
     debug 'Attempting to resolve profile path with readlink'
     resolved_profile=$(readlink -m -- "$PROFILE" 2>/dev/null)
     resolve_status=$?
     
-    if (( resolve_status != 0 )); then
+    if ((resolve_status)); then
       warn "Could not resolve profile path with readlink ${profile_path@Q}"
     else
       debug "Resolved profile path using readlink ${resolved_profile@Q}"
     fi
   fi
-  
+
   # Last resort: use the original path if it exists
-  if (( resolve_status != 0 )); then
+  if ((resolve_status)); then
     if [[ -f "$PROFILE" ]]; then
       warn "Using unresolved profile path ${PROFILE@Q}"
       resolved_profile=$PROFILE
@@ -3414,7 +3414,7 @@ main() {
   ((VERBOSE)) && info "Checking initial connection..."
   local init_check_status=0
   mysql_exec -e 'SELECT 1;' >/dev/null || init_check_status=$? # Suppress "1" output
-  if (( init_check_status != 0 )); then die 1 "Initial connection failed using profile ${PROFILE@Q}. Check errors."; fi
+  if ((init_check_status)); then die 1 "Initial connection failed using profile ${PROFILE@Q}. Check errors."; fi
   ((VERBOSE)) && success "Connection successful." && info "Using profile ${PROFILE@Q}"
 
   # --- Load command history ---
@@ -3470,7 +3470,7 @@ main() {
       # Extract the history number
       local -- history_num=${input:1}
       # Check if it's in our tracked history
-      if [[ $history_num -gt 0 && $history_num -le ${#CommandHistory[@]} ]]; then
+      if ((history_num > 0 && history_num <= ${#CommandHistory[@]})); then
         # Get the command from our history (adjust for 0-based array)
         local -- history_cmd="${CommandHistory[$((history_num-1))]}"
         info "Recalling command: $history_cmd"
