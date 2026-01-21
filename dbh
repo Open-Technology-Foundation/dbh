@@ -761,7 +761,7 @@ set_table_context() {
   
   # Verify database context exists before setting table
   if [[ -z "$Database" ]]; then
-    error "No database selected. Use /database first."
+    error 'No database selected. Use /database first.'
     return 1
   fi
   
@@ -809,10 +809,10 @@ go_back_context() {
     # If database is selected but no table, go back to top level
     Database=''
     PromptPrefix="[dbh]"
-    info "Returned to top level."
-  else 
+    info 'Returned to top level.'
+  else
     # Already at top level
-    info "Already at the top level. Use /q to quit."
+    info 'Already at the top level. Use /q to quit.'
   fi
   return 0
 }
@@ -829,7 +829,7 @@ go_back_context() {
 # Side effects:
 #   Displays the current query state information to the user
 show_select_state() {
-  info "--- Current SELECT State ---"
+  info '--- Current SELECT State ---'
   info " Database: ${Database:-<None>}"
   info " Table:    ${DataTable:-<None>}"
   
@@ -841,7 +841,7 @@ show_select_state() {
   info " WHERE:    ${WhereClause:-<None>}"
   info " ORDER BY: ${OrderClause:-<None>} $OrderDirection"
   info " LIMIT:    ${LimitClause:-<None>}"
-  info "----------------------------"
+  info '----------------------------'
   return 0
 }
 
@@ -885,9 +885,9 @@ handle_cmd_config() {
       info "Configuration file: $DBH_CONFIG_FILE"
       if [[ -r "$DBH_CONFIG_FILE" && -s "$DBH_CONFIG_FILE" ]]; then
         echo
-        grep -v '^#' "$DBH_CONFIG_FILE" 2>/dev/null | grep . || echo "[No settings found]"
+        grep -v '^#' "$DBH_CONFIG_FILE" 2>/dev/null | grep . || echo '[No settings found]'
       else
-        info "No configuration file found. Create one with '/config create'."
+        info 'No configuration file found. Create one with /config create.'
       fi
       echo
       echo 'Available options:'
@@ -933,7 +933,7 @@ EOF
       if command -v "$editor" >/dev/null 2>&1; then
         [[ ! -f "$DBH_CONFIG_FILE" ]] && handle_cmd_config create
         "$editor" "$DBH_CONFIG_FILE"
-        info "Config updated. Reload with '/config reload'."
+        info 'Config updated. Reload with /config reload.'
       else
         error "Editor not found. Set EDITOR or edit manually at $DBH_CONFIG_FILE"
       fi
@@ -1102,14 +1102,14 @@ handle_cmd_databases() {
   local db_list_output
 
   # Get list of databases securely
-  db_list_output=$(mysql_exec -Nse "SHOW DATABASES;" | sort -i) || { 
-    warn "Could not retrieve databases."
+  db_list_output=$(mysql_exec -Nse "SHOW DATABASES;" | sort -i) || {
+    warn 'Could not retrieve databases.'
     return 1
   }
   
   mapfile -t dbs <<< "$db_list_output"
-  if [[ -z "${dbs[*]}" ]]; then 
-    info "No databases found (or access denied)."
+  if [[ -z "${dbs[*]}" ]]; then
+    info 'No databases found (or access denied).'
     return 1
   fi
   
@@ -1119,16 +1119,16 @@ handle_cmd_databases() {
   
   select db in "${dbs[@]}"; do
     REPLY=$(trim "$REPLY")
-    case "$REPLY" in 
-      q|quit|exit) 
+    case "$REPLY" in
+      q|quit|exit)
         # Return to main loop instead of exiting program
-        info "Database selection cancelled."
+        info 'Database selection cancelled.'
         db=''
-        break 
+        break
         ;;
-      0|back) 
+      0|back)
         db=''
-        break 
+        break
         ;;
       \?) 
         handle_cmd_help
@@ -1173,7 +1173,7 @@ handle_cmd_databases() {
 # Returns:
 #   0 on success, 1 if database doesn't exist or no name provided
 handle_cmd_database() {
-  local db_name="$1"; [[ -z "$db_name" ]] && { error "Usage: /database <database_name>"; return 1; }
+  local db_name="$1"; [[ -z "$db_name" ]] && { error 'Usage: /database <database_name>'; return 1; }
   set_database_context "$db_name"; return $?
 }
 
@@ -1216,21 +1216,21 @@ handle_cmd_tables() {
   
   select tbl in "${tables[@]}"; do
     REPLY=$(trim "$REPLY")
-    case "$REPLY" in 
-      q|quit|exit) 
+    case "$REPLY" in
+      q|quit|exit)
         # Return to main loop instead of exiting program
-        info "Table selection cancelled."
+        info 'Table selection cancelled.'
         tbl=''
-        break 
+        break
         ;;
-      0|back) 
+      0|back)
         tbl=''
-        break 
+        break
         ;;
-      \?) 
+      \?)
         handle_cmd_help
         PS3="$PromptPrefix Select Table (0=cancel, ?=help): "
-        continue 
+        continue
         ;;
       *) 
         if [[ -z "$tbl" && -n "$REPLY" ]]; then
@@ -1271,7 +1271,7 @@ handle_cmd_tables() {
 handle_cmd_table() {
   local table_name="$1"
   require_database || return 1
-  [[ -z "$table_name" ]] && { error "Usage: /table <table_name>"; return 1; }
+  [[ -z "$table_name" ]] && { error 'Usage: /table <table_name>'; return 1; }
   set_table_context "$table_name"; return $?
 }
 
@@ -1389,13 +1389,13 @@ handle_cmd_columns() {
     REPLY=$(trim "$REPLY")
     
     case "$REPLY" in
-      q|quit|exit) 
-        info "Column selection cancelled."
+      q|quit|exit)
+        info 'Column selection cancelled.'
         tabs -8
-        return 1 
+        return 1
         ;;
-      0|done) 
-        break 
+      0|done)
+        break
         ;;
       \?)
         echo 'Use numbers to select columns, multiple selections allowed.'
@@ -1428,7 +1428,7 @@ handle_cmd_columns() {
           # Special case for "* (All columns)" - clear other selections
           if ! ((idx)); then
             selected_indices=(0)
-            info "Selected all columns (*)"
+            info 'Selected all columns (*)'
           else
             # If we have "*" and adding a specific column, remove the "*"
             if [[ " ${selected_indices[*]} " == *" 0 "* ]]; then
@@ -1841,7 +1841,7 @@ handle_cmd_sql() {
     read -n 1 -r confirm
     echo
     if [[ ! $confirm =~ ^[Yy]$ ]]; then
-      info "Operation cancelled."
+      info 'Operation cancelled.'
       return 0
     fi
   fi
@@ -1869,7 +1869,7 @@ handle_cmd_sql() {
 handle_cmd_prompt() {
   require_database "No database selected (/database)." || return 1
   info "Launching interactive MySQL prompt for database ${Database@Q}..."; info "Type 'exit' or 'quit' to return to $SCRIPT_NAME."; stty sane
-  if ! mysql --defaults-file="$PROFILE" --no-auto-rehash --prompt="[$SCRIPT_NAME:$Database] mysql> " "$Database"; then error "MySQL interactive session exited."; fi
+  if ! mysql --defaults-file="$PROFILE" --no-auto-rehash --prompt="[$SCRIPT_NAME:$Database] mysql> " "$Database"; then error 'MySQL interactive session exited.'; fi
   stty sane; clear; info "Returned to $SCRIPT_NAME. Current context: $PromptPrefix"; bind '"\e[0n": redraw-current-line'; printf '\e[0n' > /dev/tty; return 0
 }
 
@@ -2217,7 +2217,7 @@ handle_cmd_schema() {
       {
         # Introduction
         echo "Foreign key relationships in database ${Database@Q}:"
-        echo "-------------------------------------------------"
+        echo '-------------------------------------------------'
         echo
         
         # Execute the query with vertical format
@@ -2249,7 +2249,7 @@ handle_cmd_schema() {
       {
         # Introduction
         echo "Foreign key relationships in database ${Database@Q}:"
-        echo "-------------------------------------------------"
+        echo '-------------------------------------------------'
         echo
         
         # Execute the query with table format
@@ -2290,8 +2290,8 @@ handle_cmd_schema() {
                            ORDER BY t.TABLE_NAME;"
   
   echo
-  echo "Tables without foreign key relationships:"
-  echo "----------------------------------------"
+  echo 'Tables without foreign key relationships:'
+  echo '----------------------------------------'
   mysql_exec "$Database" --table -e "$query_tables_without_fk"
   
   return 0
@@ -2363,14 +2363,14 @@ handle_cmd_foreign_keys() {
     fk_file=$(create_secure_tempfile "${SCRIPT_NAME}.fk")
     
     {
-      echo "Foreign keys FROM this table to other tables:"
-      echo "-------------------------------------------"
+      echo 'Foreign keys FROM this table to other tables:'
+      echo '-------------------------------------------'
       mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
         --table -e "$query_fk_out"
       
       echo
-      echo "Foreign keys TO this table from other tables:"
-      echo "-------------------------------------------"
+      echo 'Foreign keys TO this table from other tables:'
+      echo '-------------------------------------------'
       mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
         --table -e "$query_fk_in"
     } > "$fk_file"
@@ -2385,13 +2385,13 @@ handle_cmd_foreign_keys() {
     stty sane 2>/dev/null || true
   else
     # Direct output without pager
-    echo "Foreign keys FROM this table to other tables:"
-    echo "-------------------------------------------"
+    echo 'Foreign keys FROM this table to other tables:'
+    echo '-------------------------------------------'
     mysql_exec "$Database" --table -e "$query_fk_out" 
     
     echo
-    echo "Foreign keys TO this table from other tables:"
-    echo "-------------------------------------------"
+    echo 'Foreign keys TO this table from other tables:'
+    echo '-------------------------------------------'
     mysql_exec "$Database" --table -e "$query_fk_in"
   fi
   
@@ -3632,7 +3632,7 @@ handle_cmd_stats() {
       
       {
         echo "Table Statistics for '$Database.$DataTable':"
-        echo "----------------------------------------"
+        echo '----------------------------------------'
         echo
         echo "Basic Information:"
         mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" \
@@ -3671,7 +3671,7 @@ handle_cmd_stats() {
     else
       # Direct output without pager
       echo "Table Statistics for '$Database.$DataTable':"
-      echo "----------------------------------------"
+      echo '----------------------------------------'
       echo
       echo "Basic Information:"
       mysql_exec "$Database" --table -e "$query_basic"
@@ -3941,7 +3941,7 @@ main() {
 
   # --- Prerequisite Checks ---
   command -v mysql >/dev/null || die 1 "MySQL client 'mysql' not found."
-  ((VERBOSE)) && info "Checking initial connection..."
+  ((VERBOSE)) && info 'Checking initial connection...'
   local init_check_status=0
   mysql_exec -e 'SELECT 1;' >/dev/null || init_check_status=$? # Suppress "1" output
   if ((init_check_status)); then die 1 "Initial connection failed using profile ${PROFILE@Q}. Check errors."; fi
@@ -3965,11 +3965,11 @@ main() {
     info 'No initial database selected. Please choose one:'
     handle_cmd_databases || true # Prevent exit if user cancels selection
     # If still no DB after menu (user cancelled), exit cleanly.
-    [[ -n "$Database" ]] || { info "No database selected. Exiting."; exit 0; }
+    [[ -n "$Database" ]] || { info 'No database selected. Exiting.'; exit 0; }
   fi
 
   # --- Interactive Mode Loop ---
-  info "Starting interactive mode. Type '/help' for commands, '/q' to quit."
+  info "Starting interactive mode. Type /help for commands, /q to quit."
   local input raw_cmd cmd args
   
   # Detect non-interactive mode
