@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Bash completion for dbh (MySQL Database Helper)
+# Version: 3.7.1
+
+_dbh_completion() {
+  local cur prev words cword
+  _init_completion || return
+
+  # Command-line options
+  local opts="-p --profile -v --verbose -q --quiet -V --version -h --help"
+
+  # All slash commands (including aliases)
+  local slash_commands="/help /? /databases /database /tables /table /columns /where /order /asc /desc /limit /select /state /describe /structure /status /create /count /sample /primary-key /primary_key /indexes /find /schema /foreign-keys /foreign_keys /backup /charset /engines /whoami /whois /users /processes /variables /export /stats /history /config /sql /prompt /.. /back /0 /q /quit /exit"
+
+  # Config subcommands
+  local config_subcmds="show create edit reload"
+
+  # Export formats
+  local export_formats="csv json sql"
+
+  # Export options
+  local export_opts="--format --no-headers --delimiter"
+
+  # Handle previous word context
+  case "$prev" in
+    -p|--profile)
+      _filedir 'cnf'
+      return
+      ;;
+    --format)
+      mapfile -t COMPREPLY < <(compgen -W "$export_formats" -- "$cur")
+      return
+      ;;
+    --delimiter)
+      return  # User provides custom delimiter
+      ;;
+    /config)
+      mapfile -t COMPREPLY < <(compgen -W "$config_subcmds" -- "$cur")
+      return
+      ;;
+    /backup|/export)
+      _filedir
+      return
+      ;;
+    /whois|/find|/sql|/where|/order|/limit|/sample|/history|/variables|/database|/table)
+      return  # User provides argument
+      ;;
+  esac
+
+  # Options completion (starts with -)
+  if [[ "$cur" == -* ]]; then
+    # Check if we're in /export context for export-specific options
+    local i
+    for ((i=1; i < cword; i++)); do
+      if [[ "${words[i]}" == "/export" ]]; then
+        mapfile -t COMPREPLY < <(compgen -W "$export_opts" -- "$cur")
+        return
+      fi
+    done
+    mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
+    return
+  fi
+
+  # Slash command completion (starts with /)
+  if [[ "$cur" == /* ]]; then
+    mapfile -t COMPREPLY < <(compgen -W "$slash_commands" -- "$cur")
+    return
+  fi
+
+  # Bang command completion (starts with !)
+  if [[ "$cur" == !* ]]; then
+    local bang_commands="!ls !cat !grep !head !tail !wc !df !ps !pwd"
+    mapfile -t COMPREPLY < <(compgen -W "$bang_commands" -- "$cur")
+    return
+  fi
+}
+
+complete -F _dbh_completion dbh
+
+#fin
