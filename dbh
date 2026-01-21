@@ -326,7 +326,21 @@ mysql_run_display() {
   
   return 0 # Success
 }
-# Shell execution - Launch interactive shell or run shell command
+# Handler: ! or !command
+#
+# Execute shell commands or launch an interactive shell session.
+# Without arguments, launches the user's default shell ($SHELL or bash).
+# With arguments, executes the command and waits for Enter before returning.
+#
+# Args:
+#   $@ - Optional shell command to execute
+# Context:
+#   Requires: none
+# Side effects:
+#   - Saves/restores terminal state
+#   - May execute arbitrary shell commands
+# Returns:
+#   0 always (errors are reported but don't cause failure)
 handle_shell_command() {
   local -- cmd="$*"
   
@@ -373,17 +387,52 @@ handle_shell_command() {
 
 # --- End Helpers & Command Handlers ---
 
-# --- Global Variables & State Management ---
+# --- Global State Variables ---
+# These variables maintain application state across the interactive session.
+#
+# Connection & Context:
+#   Profile_Default - Default MySQL config file path (~/.mylocalhost.cnf)
+#   PROFILE         - Active MySQL config file (--defaults-file)
+#   Database        - Currently selected database name (empty = none)
+#   DataTable       - Currently selected table name (empty = none)
+#   PAGER           - Custom pager program (default: less)
+#
+# Query Building State (used by /select and /export):
+#   SelectedColumns - Array of column names to SELECT (default: '*')
+#   WhereClause     - Raw WHERE condition (user-provided, not auto-escaped)
+#   OrderClause     - Column(s) for ORDER BY
+#   OrderDirection  - 'ASC' or 'DESC'
+#   LimitClause     - Row limit (numeric string)
+#
+# UI State:
+#   PromptPrefix    - Current prompt string showing context [dbh:db:table]
+#   CommandHistory  - Array of executed commands (persisted to file)
+#
+# Note: WhereClause is NOT automatically escaped—users must provide
+# syntactically correct SQL conditions. This allows complex expressions
+# but requires care with user-provided values.
 declare -x Profile_Default="$HOME"/.mylocalhost.cnf
 declare -xg PROFILE='' Database='' DataTable='' PAGER=''
-# State for building SELECT queries
-declare -ga SelectedColumns=('*') # Array of column names, default '*'
+declare -ga SelectedColumns=('*')
 declare -g WhereClause='' OrderClause='' OrderDirection='ASC' LimitClause='100'
 declare -g PromptPrefix='[dbh]'
-# History tracking for /history command
 declare -a CommandHistory=()
 
-# Load history from file
+# Load command history from persistent storage
+#
+# Reads command history from DBH_HISTORY_FILE into the CommandHistory array
+# and populates bash's readline history for arrow-key navigation.
+# Handles missing or empty files gracefully.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none
+# Side effects:
+#   - Populates CommandHistory array
+#   - Populates readline history for arrow-key navigation
+# Returns:
+#   0 always
 load_history() {
   CommandHistory=()
 
@@ -416,7 +465,20 @@ load_history() {
   return 0
 }
 
-# Save history to file
+# Save command history to persistent storage
+#
+# Writes the CommandHistory array to DBH_HISTORY_FILE for persistence
+# across sessions. Sets restrictive file permissions (600) for security.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none
+# Side effects:
+#   - Writes to DBH_HISTORY_FILE
+#   - Sets file permissions to 600
+# Returns:
+#   0 always
 save_history() {
   local -i old_errexit=0
   [[ $- == *e* ]] && old_errexit=1 ||:
@@ -800,9 +862,23 @@ show_select_state() {
 # before being used in SQL statements via quote_ident() and escape_sql_value().
 #=============================================================================
 
+# Handler: /config [show|create|edit|reload]
+#
+# Manage dbh configuration settings stored in ~/.config/dbh/config.
+# Provides subcommands to view, create, edit, and reload configuration.
+#
+# Args:
+#   $1 - Subcommand: show, create, edit, reload (optional, shows usage if empty)
+# Context:
+#   Requires: none
+# Side effects:
+#   - May create/modify ~/.config/dbh/config file
+#   - May reload configuration into memory
+# Returns:
+#   0 on success
 handle_cmd_config() {
   local subcommand="$1"
-  
+
   case "$subcommand" in
     show)
       info '---------------- Configuration Settings ----------------'
@@ -880,6 +956,19 @@ EOF
   return 0
 }
 
+# Handler: /help
+#
+# Display context-aware help showing available commands and current state.
+# Help output adapts based on whether a database/table is selected.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none (adapts output to current context)
+# Side effects:
+#   None
+# Returns:
+#   0 always
 handle_cmd_help() {
   info "---------------- $SCRIPT_NAME v$VERSION Help ----------------"
   info " Context: $PromptPrefix"
@@ -991,11 +1080,27 @@ handle_cmd_help() {
   return 0
 }
 
+# Handler: /databases
+#
+# Display interactive menu for database selection. Lists all accessible
+# databases sorted alphabetically and allows selection via numbered menu.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none
+# Side effects:
+#   - Sets Database variable on selection
+#   - Clears DataTable variable
+#   - Updates PromptPrefix
+#   - Triggers /tables menu on successful selection
+# Returns:
+#   0 on success or cancellation, 1 on error retrieving database list
 handle_cmd_databases() {
   local db REPLY PS3
   local -a dbs
   local db_list_output
-  
+
   # Get list of databases securely
   db_list_output=$(mysql_exec -Nse "SHOW DATABASES;" | sort -i) || { 
     warn "Could not retrieve databases."
@@ -1053,18 +1158,46 @@ handle_cmd_databases() {
   return 0
 }
 
+# Handler: /database <name>
+#
+# Directly select a database by name without showing the interactive menu.
+#
+# Args:
+#   $1 - Database name (required)
+# Context:
+#   Requires: none
+# Side effects:
+#   - Sets Database variable
+#   - Clears DataTable variable
+#   - Updates PromptPrefix
+# Returns:
+#   0 on success, 1 if database doesn't exist or no name provided
 handle_cmd_database() {
   local db_name="$1"; [[ -z "$db_name" ]] && { error "Usage: /database <database_name>"; return 1; }
   set_database_context "$db_name"; return $?
 }
 
+# Handler: /tables
+#
+# Display interactive menu for table selection. Lists all tables in the
+# current database sorted alphabetically and allows selection via numbered menu.
+#
+# Args:
+#   None
+# Context:
+#   Requires: database
+# Side effects:
+#   - Sets DataTable variable on selection
+#   - Updates PromptPrefix
+# Returns:
+#   0 on success or cancellation, 1 if no database selected or error
 handle_cmd_tables() {
   require_database || return 1
-  
+
   local tbl REPLY PS3
   local -a tables
   local table_list_output
-  
+
   # Get list of tables securely
   table_list_output=$(mysql_exec "$Database" -Nse "SHOW TABLES;" | sort -i) || { 
     warn "Could not retrieve tables for ${Database@Q}"
@@ -1122,6 +1255,19 @@ handle_cmd_tables() {
   return 0
 }
 
+# Handler: /table <name>
+#
+# Directly select a table by name without showing the interactive menu.
+#
+# Args:
+#   $1 - Table name (required)
+# Context:
+#   Requires: database
+# Side effects:
+#   - Sets DataTable variable
+#   - Updates PromptPrefix
+# Returns:
+#   0 on success, 1 if table doesn't exist or no name provided
 handle_cmd_table() {
   local table_name="$1"
   require_database || return 1
@@ -1129,10 +1275,24 @@ handle_cmd_table() {
   set_table_context "$table_name"; return $?
 }
 
+# Handler: /columns [col1,col2,...]
+#
+# Set columns for SELECT queries. Without arguments, shows interactive
+# multi-select menu. With arguments, parses comma-separated column list.
+# Use '*' to select all columns.
+#
+# Args:
+#   $@ - Optional comma-separated column names (or '*' for all)
+# Context:
+#   Requires: table
+# Side effects:
+#   - Sets SelectedColumns array
+# Returns:
+#   0 on success, 1 on error or if selection cancelled
 handle_cmd_columns() {
   # Verify we have a database and table selected
   require_table || return 1
-  
+
   # Handle direct input from arguments if provided
   local cols_str="$*"
   if [[ -n "$cols_str" ]]; then
@@ -1317,31 +1477,105 @@ handle_cmd_columns() {
   return 0
 }
 
+# Handler: /where [clause]
+#
+# Set the WHERE clause for SELECT queries. Without arguments, prompts for
+# input with current value pre-filled for editing. Empty input clears clause.
+#
+# SECURITY NOTE: WhereClause is NOT auto-escaped to allow complex SQL
+# expressions. Users must ensure proper escaping of any dynamic values.
+#
+# Args:
+#   $@ - Optional WHERE clause (without 'WHERE' keyword)
+# Context:
+#   Requires: none (state is set regardless of context)
+# Side effects:
+#   - Sets WhereClause variable
+# Returns:
+#   0 always
 handle_cmd_where() {
+  # Prompt with readline editing (-e) and pre-fill current value (-i) if no args
   local where_input="$*"; if ! (($#)); then prompt "WHERE clause (blank to clear): "; read -e -i "$WhereClause" where_input; where_input=$(trim "$where_input"); fi
   WhereClause="$where_input"; info "WHERE clause set to: ${WhereClause:-<None>}"; show_select_state; return 0
 }
 
+# Handler: /order [column(s)]
+#
+# Set the ORDER BY clause for SELECT queries. Without arguments, prompts for
+# input with current value pre-filled for editing. Empty input clears clause.
+# Multiple columns can be specified as comma-separated list.
+#
+# Args:
+#   $@ - Optional column name(s) for ordering (comma-separated for multiple)
+# Context:
+#   Requires: none (state is set regardless of context)
+# Side effects:
+#   - Sets OrderClause variable
+# Returns:
+#   0 always
 handle_cmd_order() {
+  # Prompt with readline editing (-e) and pre-fill current value (-i) if no args
   local order_input="$*"; if ! (($#)); then prompt "ORDER BY column(s) (blank to clear): "; read -e -i "$OrderClause" order_input; order_input=$(trim "$order_input"); fi
   OrderClause="$order_input"; info "ORDER BY clause set to: ${OrderClause:-<None>}"; show_select_state; return 0
 }
 
+# Handler: /limit [number]
+#
+# Set the LIMIT clause for SELECT queries. Without arguments, prompts for
+# input with current value pre-filled for editing. Empty input clears limit.
+# Value must be a positive integer.
+#
+# Args:
+#   $1 - Optional row limit (positive integer)
+# Context:
+#   Requires: none (state is set regardless of context)
+# Side effects:
+#   - Sets LimitClause variable
+# Returns:
+#   0 on success, 1 if invalid (non-numeric) value provided
 handle_cmd_limit() {
+  # Complex argument handling: prompt if no args, or if single empty arg passed
   local limit_input=''; if (($# == 1)) && [[ -n "$1" ]]; then limit_input="$1"; elif (($# != 1)); then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); elif (($# == 1)) && [[ -z "$1" ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); fi
   if [[ -z "$limit_input" ]]; then LimitClause=''; info 'LIMIT cleared.'; elif [[ "$limit_input" =~ ^[0-9]+$ ]]; then LimitClause="$limit_input"; info "LIMIT set to: $LimitClause"; else error "Invalid LIMIT value '$limit_input'. Must be a positive number."; return 1; fi
   show_select_state; return 0
 }
 
+# Handler: /asc | /desc
+#
+# Set the ORDER BY direction for SELECT queries. Called via /asc or /desc
+# commands which pass the direction as an argument.
+#
+# Args:
+#   $1 - Direction: 'asc' or 'desc' (case-insensitive)
+# Context:
+#   Requires: none (state is set regardless of context)
+# Side effects:
+#   - Sets OrderDirection variable ('ASC' or 'DESC')
+# Returns:
+#   0 always
 handle_cmd_asc_desc() {
   local direction="$1"; if [[ "${direction,,}" == 'desc' ]]; then OrderDirection='DESC'; info 'ORDER BY direction set to DESC.'; else OrderDirection='ASC'; info 'ORDER BY direction set to ASC.'; fi
   show_select_state; return 0
 }
 
+# Handler: /select
+#
+# Execute SELECT query using current query state (columns, where, order, limit).
+# Builds and executes a properly quoted SQL statement from the current state
+# variables. Output is paged through less if available.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   - Displays query results to terminal
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_select() {
   # Verify context requirements
   require_table "No table selected (/table)." || return 1
-  
+
   # Build SQL query safely
   local sql='SELECT '
 
@@ -1418,17 +1652,43 @@ handle_cmd_select() {
   return $?
 }
 
+# Handler: /describe
+#
+# Show table structure using MySQL DESCRIBE command. Displays column names,
+# types, nullability, keys, defaults, and extra attributes.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_desc() {
   require_table || return 1
-  
+
   info "Structure for '$Database.$DataTable':"
   mysql_exec "$Database" -e "DESCRIBE $(quote_ident "$DataTable");" || return 1
   return 0
 }
 
+# Handler: /structure [v]
+#
+# Show detailed table structure using SHOW FULL COLUMNS. Includes additional
+# information like collation, privileges, and comments not shown by DESCRIBE.
+#
+# Args:
+#   $1 - Optional 'v' for vertical format output
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_structure() {
   require_table || return 1
-  
+
   local format="$1"
   local quoted_table
   quoted_table=$(quote_ident "$DataTable")
@@ -1475,17 +1735,43 @@ handle_cmd_structure() {
   return 0
 }
 
+# Handler: /status
+#
+# Show table status information including engine, row count, data length,
+# index length, auto_increment value, create/update times, and collation.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_status() {
   require_table || return 1
-  
+
   info "Status for '$Database.$DataTable':"
   mysql_exec "$Database" -e "SHOW TABLE STATUS WHERE Name = $(escape_sql_value "$DataTable")\G" || return 1
   return 0
 }
 
+# Handler: /create
+#
+# Show the CREATE TABLE statement for the current table. Useful for
+# understanding table structure, recreating tables, or documentation.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   0 on success, 1 if CREATE output could not be parsed
 handle_cmd_create() {
   require_table || return 1
-  
+
   info "CREATE TABLE statement for '$Database.$DataTable':"
   local create_statement
   create_statement=$(mysql_exec "$Database" -sN -e "SHOW CREATE TABLE $(quote_ident "$DataTable");") || return 1
@@ -1500,20 +1786,49 @@ handle_cmd_create() {
   return 0
 }
 
+# Handler: /count
+#
+# Display the row count for the current table using SELECT COUNT(*).
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_count() {
   require_table || return 1
-  
+
   local count
   count=$(mysql_exec "$Database" -Nse "SELECT COUNT(*) FROM $(quote_ident "$DataTable");") || return 1
   info "Row count for '$Database.$DataTable': $count"
   return 0
 }
 
+# Handler: /sql <SQL>
+#
+# Execute arbitrary SQL statements in the current database context.
+# Prompts for confirmation before executing potentially destructive
+# operations (DROP, DELETE, TRUNCATE, UPDATE, ALTER).
+#
+# SECURITY NOTE: SQL is executed directly without escaping. This command
+# gives full SQL access—use with caution on production systems.
+#
+# Args:
+#   $@ - SQL statement to execute (required)
+# Context:
+#   Requires: database
+# Side effects:
+#   - Executes arbitrary SQL (may modify data)
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_sql() {
   local sql_command="$*"
-  
+
   require_database "No database selected (/database)." || return 1
-  
+
   if [[ -z "$sql_command" ]]; then
     error 'Usage: /sql <SQL query...>'
     return 1
@@ -1536,6 +1851,21 @@ handle_cmd_sql() {
   return $?
 }
 
+# Handler: /prompt
+#
+# Launch an interactive MySQL command-line session for the current database.
+# Provides direct access to the MySQL client with full SQL capabilities.
+# Type 'exit' or 'quit' to return to dbh.
+#
+# Args:
+#   None
+# Context:
+#   Requires: database
+# Side effects:
+#   - Temporarily transfers control to MySQL client
+#   - Resets terminal state on return
+# Returns:
+#   0 on return to dbh
 handle_cmd_prompt() {
   require_database "No database selected (/database)." || return 1
   info "Launching interactive MySQL prompt for database ${Database@Q}..."; info "Type 'exit' or 'quit' to return to $SCRIPT_NAME."; stty sane
@@ -1583,7 +1913,19 @@ handle_cmd_sample() {
   return $?
 }
 
-# Show primary key information for the current table
+# Handler: /primary-key
+#
+# Display primary key information for the current table including
+# column names, data types, and constraint name.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_primary_key() {
   require_table || return 1
   
@@ -1616,7 +1958,19 @@ handle_cmd_primary_key() {
   return $exit_code
 }
 
-# Show all indexes for the current table
+# Handler: /indexes
+#
+# Display all indexes for the current table including index name,
+# uniqueness, columns, and cardinality.
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_indexes() {
   require_table || return 1
   
@@ -1648,7 +2002,23 @@ handle_cmd_indexes() {
   return $?
 }
 
-# Search table data for specific text
+# Handler: /find <text>
+#
+# Search for text across all columns in the current table. Uses LIKE
+# pattern matching with wildcards. Searches are case-insensitive and
+# match partial strings. Results are limited to 100 rows.
+#
+# Note: Uses CAST(column AS CHAR) to enable searching non-string columns
+# (INT, DATE, etc.) as text patterns.
+#
+# Args:
+#   $@ - Text to search for (prompts if not provided)
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   MySQL exit code (0 on success)
 handle_cmd_find() {
   require_table || return 1
   
@@ -1686,8 +2056,9 @@ handle_cmd_find() {
   local quoted_col
   for col in "${columns[@]}"; do
     quoted_col=$(quote_ident "$col")
-    # Only apply LIKE to string-like columns (VARCHAR, TEXT, etc.)
-    # For non-string columns, use string conversion
+    # CAST to CHAR enables LIKE pattern matching on non-string columns (INT, DATE, DECIMAL, etc.)
+    # This allows searching numeric IDs, dates, or other types as text patterns.
+    # Example: searching "123" will match id=123, price=123.45, date=2023-01-23
     conditions+=("CAST($quoted_col AS CHAR) LIKE CONCAT('%', $(escape_sql_value "$search_text"), '%')")
   done
   
@@ -1722,7 +2093,20 @@ handle_cmd_find() {
   return $?
 }
 
-# Display command history
+# Handler: /history [n]
+#
+# Display command history with optional limit on number of entries shown.
+# History is persistent across sessions and stored in DBH_HISTORY_FILE.
+# Shows history numbers that can be used with !N to recall commands.
+#
+# Args:
+#   $1 - Optional number of history entries to show (default: 20)
+# Context:
+#   Requires: none
+# Side effects:
+#   None
+# Returns:
+#   0 always
 handle_cmd_history() {
   local count=20 # Default number of history items to show
   
@@ -1764,7 +2148,19 @@ handle_cmd_history() {
   return 0
 }
 
-# Show database schema with table relationships
+# Handler: /schema [v]
+#
+# Display database schema showing foreign key relationships between tables.
+# Also lists tables without foreign key relationships.
+#
+# Args:
+#   $1 - Optional 'v' for vertical format output
+# Context:
+#   Requires: database
+# Side effects:
+#   None
+# Returns:
+#   0 on success, 1 if no database selected
 handle_cmd_schema() {
   require_database || return 1
   
@@ -1901,7 +2297,20 @@ handle_cmd_schema() {
   return 0
 }
 
-# Show foreign key relationships for the current table
+# Handler: /foreign-keys
+#
+# Display foreign key relationships for the current table. Shows both
+# outgoing references (this table references others) and incoming
+# references (other tables reference this one).
+#
+# Args:
+#   None
+# Context:
+#   Requires: table
+# Side effects:
+#   None
+# Returns:
+#   0 on success, 1 if no table selected
 handle_cmd_foreign_keys() {
   if [[ -z "$DataTable" ]]; then
     error "No table selected. Use /table first."
@@ -1989,7 +2398,20 @@ handle_cmd_foreign_keys() {
   return 0
 }
 
-# Create a backup of current table or database
+# Handler: /backup [filename]
+#
+# Create a SQL backup of the current table or entire database using mysqldump.
+# If a table is selected, backs up only that table; otherwise backs up the
+# entire database. Includes triggers, routines, and DROP TABLE statements.
+#
+# Args:
+#   $1 - Optional output filename (auto-generated if not provided)
+# Context:
+#   Requires: database (table optional)
+# Side effects:
+#   - Creates SQL backup file
+# Returns:
+#   0 on success, 1 if mysqldump not found or backup fails
 handle_cmd_backup() {
   local output_file="$1"
   local current_time
@@ -2043,7 +2465,20 @@ handle_cmd_backup() {
   return 0
 }
 
-# Show character set information
+# Handler: /charset
+#
+# Display character set and collation information. Shows server-level
+# settings, and if database/table are selected, also shows their specific
+# character sets and column-level collations.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none (adapts output to current context)
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_charset() {
   info "Character Set Information:"
   
@@ -2156,7 +2591,20 @@ handle_cmd_charset() {
   return 0
 }
 
-# List available storage engines
+# Handler: /engines
+#
+# Display available MySQL storage engines and their support status.
+# If a database is selected, also shows which engine each table uses
+# and provides a summary of engine usage.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none (enhanced output if database selected)
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_engines() {
   info "Available Storage Engines:"
   
@@ -2222,7 +2670,20 @@ handle_cmd_engines() {
   return 0
 }
 
-# Show information about a specified MySQL user
+# Handler: /whois [user[@host]]
+#
+# Display detailed information about a MySQL user including account status,
+# authentication method, and privileges at global, database, and table levels.
+# Without arguments, shows info for the current user.
+#
+# Args:
+#   $@ - Optional user[@host] specification (defaults to current user)
+# Context:
+#   Requires: none
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_whois() {
   local user_input="$*"
   local user_name
@@ -2442,7 +2903,19 @@ handle_cmd_whois() {
   return 0
 }
 
-# Show current MySQL user
+# Handler: /whoami
+#
+# Display the current MySQL user and effective user (after grants), along
+# with their privileges. Shows both USER() and CURRENT_USER() values.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none (enhanced output if database selected)
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_whoami() {
   info "Current MySQL user:"
   
@@ -2538,7 +3011,20 @@ handle_cmd_whoami() {
   return 0
 }
 
-# List MySQL users and their privileges
+# Handler: /users
+#
+# Display all MySQL users with their authentication methods and privileges.
+# Shows global privileges, database-specific privileges, and table-level
+# privileges for the current database if one is selected.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none (enhanced output if database selected)
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_users() {
   info "MySQL Users and Privileges:"
   
@@ -2725,7 +3211,20 @@ handle_cmd_users() {
   return 0
 }
 
-# Show active MySQL processes
+# Handler: /processes
+#
+# Display active MySQL processes using SHOW FULL PROCESSLIST. Shows
+# connection ID, user, host, database, command, time, state, and query.
+# Useful for monitoring and identifying long-running or blocked queries.
+#
+# Args:
+#   None
+# Context:
+#   Requires: none
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_processes() {
   info "Active MySQL Processes:"
   
@@ -2763,7 +3262,19 @@ handle_cmd_processes() {
   return 0
 }
 
-# Display MySQL system variables
+# Handler: /variables [filter]
+#
+# Display MySQL system variables. Without a filter, shows all variables.
+# With a filter, shows only variables whose names contain the filter string.
+#
+# Args:
+#   $@ - Optional filter string for variable names
+# Context:
+#   Requires: none
+# Side effects:
+#   None
+# Returns:
+#   0 on success
 handle_cmd_variables() {
   local filter="$*"
   local query
@@ -2811,7 +3322,19 @@ handle_cmd_variables() {
   return 0
 }
 
-# Export query results to a file
+# Handler: /export [filename] [--format csv|sql|json] [--no-headers] [--delimiter char]
+#
+# Export query results to a file using current query state (columns, where,
+# order, limit). Supports CSV, SQL INSERT statements, and JSON formats.
+#
+# Args:
+#   $@ - Optional: filename, --format, --no-headers, --delimiter options
+# Context:
+#   Requires: table
+# Side effects:
+#   - Creates export file
+# Returns:
+#   0 on success, 1 on error
 handle_cmd_export() {
   require_table || return 1
   
@@ -3048,7 +3571,20 @@ handle_cmd_export() {
   return 0
 }
 
-# Show database/table statistics and metrics
+# Handler: /stats
+#
+# Display statistics and metrics. If a table is selected, shows table-specific
+# stats (row count, size, indexes, cardinality). If only a database is selected,
+# shows database-wide stats (total size, table sizes, engine usage).
+#
+# Args:
+#   None
+# Context:
+#   Requires: database (table optional for more detailed output)
+# Side effects:
+#   - May run ANALYZE TABLE for cardinality stats
+# Returns:
+#   0 on success, 1 if no database selected
 handle_cmd_stats() {
   require_database || return 1
   
@@ -3459,40 +3995,52 @@ main() {
         history -s "$input" 2>/dev/null || true
         history -w "$HISTFILE" 2>/dev/null || true
       fi
-    # First check for history recall with !number
+    # --- History Recall: !N Pattern ---
+    # Check for history recall syntax: !N where N is a positive integer.
+    # This allows users to re-execute previous commands by number.
+    # Example: !5 recalls and executes the 5th command from history.
+    # The recalled command replaces input and continues through normal parsing.
     if [[ "$input" =~ ^![0-9]+$ ]]; then
-      # Extract the history number
-      local -- history_num=${input:1}
-      # Check if it's in our tracked history
+      local -- history_num=${input:1}  # Extract number after '!'
+      # Validate: must be 1-based index within CommandHistory bounds
       if ((history_num > 0 && history_num <= ${#CommandHistory[@]})); then
-        # Get the command from our history (adjust for 0-based array)
+        # Convert to 0-based array index and retrieve command
         local -- history_cmd="${CommandHistory[$((history_num-1))]}"
         info "Recalling command: $history_cmd"
-        # Set the input to the recalled command and continue processing
+        # Replace input with recalled command for normal processing below
         input=$history_cmd
-        # Add to history and continue with normal processing
         CommandHistory+=("$input")
       else
-        # Let the shell's built-in history expansion handle it
+        # Number out of range—fall through to shell command handling
+        # where bash's built-in history expansion may handle it
         info 'Using shell history recall'
-        # We'll fall through to shell command handling (!command)
       fi
     fi
     
-    # Process input based on first character
+    # --- Command Dispatch: Three Input Types ---
+    # dbh recognizes three distinct input formats based on the first character:
+    #   1. /command [args] - Slash commands for database operations
+    #   2. !command        - Bang commands for shell execution (or just ! for shell)
+    #   3. SQL statement   - Direct SQL execution (anything else)
+    #
     if [[ "$input" =~ ^/ ]]; then
-      # Handle slash commands (/command)
+      # --- Type 1: Slash Commands (/command [args]) ---
+      # Parse command name and arguments from input after removing leading '/'
       raw_cmd=${input:1}
-      if [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)[[:space:]]+(.*)$ ]]; then 
+      # Pattern 1: command with arguments (e.g., "/database mydb")
+      if [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)[[:space:]]+(.*)$ ]]; then
         cmd=${BASH_REMATCH[1]}
         args=${BASH_REMATCH[2]}
-      elif [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)$ ]]; then 
+      # Pattern 2: command without arguments (e.g., "/tables")
+      elif [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)$ ]]; then
         cmd=$raw_cmd
         args=''
-      elif [[ "$raw_cmd" =~ ^(\.\.|0|back)$ ]]; then 
+      # Pattern 3: navigation shortcuts (/.., /0, /back)
+      elif [[ "$raw_cmd" =~ ^(\.\.|0|back)$ ]]; then
         cmd=$raw_cmd
         args=''
-      elif [[ -z "$raw_cmd" ]]; then 
+      # Pattern 4: just "/" - ignore empty command
+      elif [[ -z "$raw_cmd" ]]; then
         continue
       else
         error "Invalid command format ${input@Q}"
@@ -3553,22 +4101,25 @@ main() {
         *)              error "Unknown command '/$cmd'. Type '/help' for options." ;;
       esac
     elif [[ "$input" =~ ^! ]]; then
-      # Handle shell commands (!command)
+      # --- Type 2: Bang Commands (!command) ---
+      # Execute shell commands while preserving database context.
+      # Three variants:
+      #   "!"              - Launch interactive shell session
+      #   "!shell cmd"     - Alternative syntax for running cmd
+      #   "!cmd"           - Run cmd directly
       if [[ "$input" == '!' ]]; then
-        # Just '!' launches interactive shell
         handle_shell_command || true
       else
-        # '!command' or '!shell command' executes command
         if [[ "$input" =~ ^!shell[[:space:]]+(.*)$ ]]; then
-          # '!shell command' syntax
           handle_shell_command "${BASH_REMATCH[1]}" || true
         else
-          # '!command' syntax - remove the leading ! and pass rest as command
           handle_shell_command "${input:1}" || true
         fi
       fi
     else
-      # Treat as direct SQL command if a database is selected
+      # --- Type 3: Direct SQL ---
+      # Any input not starting with / or ! is treated as raw SQL.
+      # Requires a database to be selected; otherwise shows error with guidance.
       if [[ -n "$Database" ]]; then
         info "Executing SQL in ${Database@Q}: $input"
         mysql_run_display "$Database" --table -e "$input" || true
