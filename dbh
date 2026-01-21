@@ -3269,21 +3269,22 @@ main() {
   # Load user configuration from ~/.config/dbh/config
   load_config
   
-  while (($#)); do 
+  while (($#)); do
     case $1 in
       -p|--profile)
         noarg "$@"; shift
         PROFILE=$1
+        ;;
+      -V|--version)
+        # Must come before -v due to nocasematch
+        echo "$SCRIPT_NAME $VERSION"
+        exit 0
         ;;
       -v|--verbose)
         VERBOSE+=1
         ;;
       -q|--quiet)
         VERBOSE=0
-        ;;
-      -V|--version)
-        echo "$SCRIPT_NAME $VERSION"
-        exit 0
         ;;
       -h|--help)
         usage 0

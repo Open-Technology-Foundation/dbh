@@ -16,8 +16,13 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
   echo
   echo "If no test files are specified, all tests will be run."
   echo "Available test files:"
-  echo "  test_basic.sh     - Basic functionality tests"
-  echo "  test_security.sh  - Security-focused tests"
+  echo "  test_basic.sh      - Basic functionality tests"
+  echo "  test_cli.sh        - CLI argument tests"
+  echo "  test_functions.sh  - Helper function tests"
+  echo "  test_parsing.sh    - Command parsing tests"
+  echo "  test_security.sh   - Security-focused tests"
+  echo "  test_state.sh      - State management tests"
+  echo "  test_validation.sh - Context validation tests"
   echo
   echo "Examples:"
   echo "  $0                    # Run all tests"
@@ -46,7 +51,15 @@ source ./test_framework.sh
 test_files=("$@")
 if [ ${#test_files[@]} -eq 0 ]; then
   # No specific files provided, run all tests
-  test_files=("test_basic.sh" "test_security.sh" "test_validation.sh")
+  test_files=(
+    "test_basic.sh"
+    "test_cli.sh"
+    "test_functions.sh"
+    "test_parsing.sh"
+    "test_security.sh"
+    "test_state.sh"
+    "test_validation.sh"
+  )
 fi
 
 # Run the specified test files
