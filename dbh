@@ -29,22 +29,22 @@ set -eEuo pipefail +o histexpand
 shopt -s extglob globstar checkwinsize nocasematch inherit_errexit
 
 # --- Config & History Setup ---
-HISTSIZE=1000
-HISTFILESIZE=2000
+declare -i HISTSIZE=1000
+declare -i HISTFILESIZE=2000
 shopt -s histappend
 
-declare -x LESS="-FXRS"
+declare -x LESS='-FXRS'
 
 # Setup directory and files
-DBH_CONFIG_DIR="$HOME/.config/dbh"
-DBH_CONFIG_FILE="$DBH_CONFIG_DIR/config"
-DBH_HISTORY_FILE="$DBH_CONFIG_DIR/history"
-DBH_READLINE_HISTORY="$DBH_CONFIG_DIR/readline_history"
-HISTFILE="$DBH_READLINE_HISTORY"  # For arrow key navigation
+declare -- DBH_CONFIG_DIR="$HOME"/.config/dbh
+declare -- DBH_CONFIG_FILE="$DBH_CONFIG_DIR"/config
+declare -- DBH_HISTORY_FILE="$DBH_CONFIG_DIR"/history
+declare -- DBH_READLINE_HISTORY="$DBH_CONFIG_DIR"/readline_history
+declare -r HISTFILE="$DBH_READLINE_HISTORY"  # For arrow key navigation
 
 # Create config directory if needed
 if [[ ! -d "$DBH_CONFIG_DIR" ]]; then
-  mkdir -p "$DBH_CONFIG_DIR" || warn "Could not create directory: $DBH_CONFIG_DIR"
+  mkdir -p "$DBH_CONFIG_DIR" || warn "Could not create directory ${DBH_CONFIG_DIR@Q}"
 fi
 
 # Load user configuration from ~/.config/dbh/config
@@ -61,16 +61,16 @@ fi
 # handled gracefully.
 load_config() {
   local -i old_errexit=0
-  [[ $- == *e* ]] && old_errexit=1
+  [[ $- == *e* ]] && old_errexit=1 ||:
   set +e
 
   if [[ -r "$DBH_CONFIG_FILE" && -s "$DBH_CONFIG_FILE" ]]; then
-    local line key value
+    local -- line key value
     local -i count=0
 
     while IFS= read -r line || [[ -n "$line" ]]; do
       # Skip empty lines and comments
-      [[ -z "$line" || ${line:0:1} == "#" ]] && continue
+      [[ -z "$line" || ${line:0:1} == "#" ]] && continue ||:
 
       # Parse key=value pairs with regex
       if [[ "$line" =~ ^([A-Za-z0-9_]+)=(.*)$ ]]; then
@@ -81,58 +81,59 @@ load_config() {
 
         # Apply configuration settings based on key
         case "$key" in
-          DEFAULT_PROFILE) Profile_Default="$value"; count+=1 ;;
-          DEFAULT_DATABASE) [[ -z "$Database" ]] && Database="$value"; count+=1 ;;
-          DEFAULT_LIMIT) LimitClause="$value"; count+=1 ;;
-          MAX_HISTORY) HISTSIZE="$value"; HISTFILESIZE="$value"; count+=1 ;;
-          PAGER) PAGER="$value"; count+=1 ;;
+          DEFAULT_PROFILE)   Profile_Default="$value"; count+=1 ;;
+          DEFAULT_DATABASE)  [[ -n "$Database" ]] || Database="$value"; count+=1 ;;
+          DEFAULT_LIMIT)     LimitClause="$value"; count+=1 ;;
+          MAX_HISTORY)       HISTSIZE="$value"; HISTFILESIZE="$value"; count+=1 ;;
+          PAGER)             PAGER="$value"; count+=1 ;;
         esac
       fi
     done < "$DBH_CONFIG_FILE" 2>/dev/null || true
 
     # Inform user about loaded settings (only if interactive)
-    [[ $count -gt 0 && -t 1 ]] && info "Loaded $count configuration settings"
+    ((count)) && [[ -t 1 ]] && info "Loaded $count configuration settings" ||:
   fi
 
   # Restore original errexit state
-  ((old_errexit)) && set -e
+  ((old_errexit==0)) || set -e
   return 0
 }
 
-declare -r VERSION='3.7.1'
+declare -r VERSION=3.7.1
 # Get script path and extract directory/program name
 #shellcheck disable=SC2155
-declare -r SCRIPT_PATH=$(realpath -e -- "$0") || { echo "ERROR: Could not resolve script path"; exit 1; }
-declare -r SCRIPT_DIR="${SCRIPT_PATH%/*}" PRG="${SCRIPT_PATH##*/}"
+declare -r SCRIPT_PATH=$(realpath -- "$0") || { echo "ERROR: Could not resolve script path"; exit 1; }
+declare -r SCRIPT_DIR="${SCRIPT_PATH%/*}" SCRIPT_NAME="${SCRIPT_PATH##*/}"
 
 # --- Messaging Functions ---
-declare -ix VERBOSE=1 DEBUG=0
-declare -- RED='' YELLOW='' GREEN='' CYAN='' LIGHT_YELLOW='' NOCOLOR=''
+declare -i VERBOSE=1 DEBUG=0
 if [[ -t 2 ]]; then
-  RED=$'\e[1;31m' YELLOW=$'\e[1;33m' GREEN=$'\e[1;32m' CYAN=$'\e[1;36m' LIGHT_YELLOW=$'\e[0;33m' NOCOLOR=$'\e[0m'
+  declare -r RED=$'\e[1;31m' YELLOW=$'\e[1;33m' GREEN=$'\e[1;32m' CYAN=$'\e[1;36m' LIGHT_YELLOW=$'\e[0;33m' NOCOLOR=$'\e[0m'
+else
+  declare -r RED='' YELLOW='' GREEN='' CYAN='' LIGHT_YELLOW='' NOCOLOR=''
 fi
 
 _message() { # type (1=info, 2=warn, 3=error, 4=success, 5=debug), prefix, text
   local -i type=$1 use_stderr=0
-  local prefix="$3" text="$4" color="$NOCOLOR"
+  local -- prefix=$3 text=$4 color=$NOCOLOR
   case $type in
-    2) color="$YELLOW"; use_stderr=1;;
-    3) color="$RED"; use_stderr=1;;
-    4) color="$GREEN";; 
+    2) color=$YELLOW; use_stderr=1;;
+    3) color=$RED; use_stderr=1;;
+    4) color=$GREEN;;
     5) ((DEBUG)) || return 0; color="$CYAN"; use_stderr=1;;
-    *) color="$NOCOLOR";;
+    *) color=$NOCOLOR;;
   esac
   if (( type > 1 || VERBOSE > 0 )); then
     printf '%s%s%s%s\n' "$color" "$prefix" "$text" "$NOCOLOR" >&"$((use_stderr + 1))"
   fi
   return 0 # Messaging itself should not cause script exit via set -e
 }
-info()    { _message 1 "" "" "$*"; }
-warn()    { _message 2 "" "WARN: " "$*"; }
-error()   { _message 3 "" "ERROR: " "$*"; }
-success() { _message 4 "" "OK: " "$*"; }
-debug()   { _message 5 "" "DEBUG: " "$*"; }
-die()     { _message 3 "" "FATAL: " "${2:-"Unknown error"}"; exit "${1:-1}"; }
+info()    { _message 1 '' '' "$*"; }
+warn()    { _message 2 '' "WARN: " "$*"; }
+error()   { _message 3 '' "ERROR: " "$*"; }
+success() { _message 4 '' "OK: " "$*"; }
+debug()   { _message 5 '' "DEBUG: " "$*"; }
+die()     { _message 3 '' "FATAL: " "${2:-"Unknown error"}"; exit "${1:-1}"; }
 # --- End Messaging ---
 
 # --- Standard Utility Overrides/Helpers ---
@@ -153,7 +154,7 @@ declare -fx grep find sed
 # --- End Utility Overrides ---
 
 # --- Script Helpers ---
-noarg() { if (($# < 2)) || [[ ${2:0:1} == '-' ]]; then die 2 "Missing argument for option '$1'"; fi; true; }
+noarg() { if (($# < 2)) || [[ ${2:0:1} == '-' ]]; then die 2 "Missing argument for option ${1@Q}"; fi; true; }
 decp() { declare -p "$@" | sed 's/^declare -[a-zA-Z-]* //'; }
 trim() { local v="$*"; v="${v#"${v%%[![:blank:]]*}"}"; echo -n "${v%"${v##*[![:blank:]]}"}"; }
 
@@ -171,7 +172,7 @@ trim() { local v="$*"; v="${v#"${v%%[![:blank:]]*}"}"; echo -n "${v%"${v##*[![:b
 # Returns:
 #   The properly quoted identifier
 quote_ident() { 
-  local ident="$1"
+  local -- ident=$1
   # Double backticks within identifiers (MySQL's escaping rule for identifiers)
   ident="${ident//\`/\`\`}"
   echo "\`$ident\`"
@@ -191,7 +192,7 @@ quote_ident() {
 # Returns:
 #   The properly escaped and quoted string value
 escape_sql_value() {
-  local value="$1"
+  local -- value=$1
   # Replace single quotes with two single quotes (SQL standard escaping)
   value="${value//\'/\'\'}"
   echo "'$value'"
@@ -210,14 +211,14 @@ escape_sql_value() {
 # Returns:
 #   The path to the created temporary file
 create_secure_tempfile() {
-  local prefix="$1"
-  local tmp_dir="${TMPDIR:-/tmp}"
+  local -- prefix=$1
+  local -- tmp_dir=${TMPDIR:-/tmp}
   
   # Fall back to /tmp if the specified temp directory doesn't exist or isn't writable
-  [[ -d "$tmp_dir" && -w "$tmp_dir" ]] || tmp_dir="/tmp"
+  [[ -d "$tmp_dir" && -w "$tmp_dir" ]] || tmp_dir=/tmp
   
   # Create temp file with a unique name
-  local temp_file
+  local -- temp_file
   temp_file=$(TMPDIR="$tmp_dir" mktemp "${prefix}.XXXXXXXXXX")
   
   # Apply restrictive permissions - only owner can read/write
@@ -246,16 +247,17 @@ create_secure_tempfile() {
 # Exit codes:
 #   MySQL client exit code is preserved and returned
 mysql_exec() {
-  local output="" error="" exit_code=1
-  local out_file err_file
+  local -- output='' error=''
+  local -i exit_code=1
+  local -- out_file err_file
 
   # Create secure temp files and set cleanup trap
-  out_file=$(create_secure_tempfile "${PRG}.out")
-  err_file=$(create_secure_tempfile "${PRG}.err")
+  out_file=$(create_secure_tempfile "${SCRIPT_NAME}.out")
+  err_file=$(create_secure_tempfile "${SCRIPT_NAME}.err")
   trap 'rm -f "$out_file" "$err_file"; trap - RETURN' RETURN
 
   # Execute command with the profile variable from main scope
-  [[ $DEBUG -eq 1 ]] && debug "MySQL: $*"
+  ((DEBUG)) || debug "MySQL: $*"
   mysql --defaults-file="$PROFILE" --no-auto-rehash "$@" >"$out_file" 2>"$err_file"
   exit_code=$?
 
@@ -266,18 +268,21 @@ mysql_exec() {
   trap - RETURN
 
   # Output stdout regardless of exit status
-  [[ -n "$output" ]] && echo "$output"
+  [[ -z "$output" ]] || echo "$output"
 
   # Handle errors
-  if (( exit_code != 0 )); then
+  if ((exit_code)); then
     # Parse and format MySQL error messages for better readability
-    local mysql_err_msg
+    local -- mysql_err_msg
     mysql_err_msg=$(echo "$error" | sed -n 's/^.*ERROR[[:space:]]*[0-9]*[[:space:]]*(\(.*\)).*:[[:space:]]*\(.*\)/\1: \2/p' | head -n 1)
     
     # Display appropriate error message
-    [[ -n "$mysql_err_msg" ]] && error "MySQL Error: $mysql_err_msg" ||
-      [[ -n "$error" ]] && error "MySQL Error: ${error}"
-    
+    if [[ -n "$mysql_err_msg" ]]; then
+      error "MySQL Error: $mysql_err_msg"
+    else
+      [[ -z "$error" ]] || error "MySQL Error: ${error}"
+    fi
+
     return $exit_code
   elif [[ -n "$error" ]]; then 
     # Handle warnings (non-fatal errors)
@@ -302,18 +307,18 @@ mysql_exec() {
 #   Output goes directly to the terminal
 mysql_run_display() {
   # Expects DB name as $1, then mysql arguments (like -e "SQL")
-  local db_name="$1"
+  local -- db_name=$1
   shift # Remove db_name from args list
 
-  debug "Executing MySQL display command with profile '$PROFILE' for DB '$db_name': $*"
+  debug "Executing MySQL display command with profile ${PROFILE@Q} for DB ${db_name@Q}: $*"
   
   # Execute directly, letting output go to terminal
   # This allows for proper table formatting and interactive display
   mysql --defaults-file="$PROFILE" --no-auto-rehash "$db_name" "$@"
-  local exit_code=$?
+  local -i exit_code=$?
   debug "MySQL display command finished, exit_code=$exit_code"
 
-  if (( exit_code != 0 )); then
+  if ((exit_code)); then
     # Error messages likely already printed by mysql to stderr
     error "MySQL display command failed (Exit Code: $exit_code)" # error() returns 0
     return $exit_code # Return non-zero status
@@ -323,7 +328,7 @@ mysql_run_display() {
 }
 # Shell execution - Launch interactive shell or run shell command
 handle_shell_command() {
-  local cmd="$*"
+  local -- cmd="$*"
   
   # Save terminal state
   local saved_stty
@@ -331,16 +336,16 @@ handle_shell_command() {
   
   info "Launching shell $([[ -n "$cmd" ]] && echo "command: $cmd" || echo "session")..."
   
+  local -i exit_code=0
   if [[ -n "$cmd" ]]; then
     # Execute specific command
     bash -c "$cmd"
-    
-    local exit_code=$?
+    exit_code=$?
     
     # Provide a prompt to continue after viewing output
     if [[ -t 0 && -t 1 ]]; then  # Only if both stdin and stdout are terminals
       echo
-      prompt "Press Enter to continue... "
+      prompt 'Press Enter to continue... '
       read -n 1 -s
       echo
     fi
@@ -351,17 +356,16 @@ handle_shell_command() {
     else
       bash
     fi
-    
-    local exit_code=$?
+    exit_code=$?
   fi
   
   # Restore terminal state
   stty "$saved_stty" 2>/dev/null || true
   
   if (( exit_code == 0 )); then
-    info "Shell session completed. Returned to $PRG."
+    info "Shell session completed. Returned to $SCRIPT_NAME."
   else
-    warn "Shell exited with status $exit_code. Returned to $PRG."
+    warn "Shell exited with status $exit_code. Returned to $SCRIPT_NAME."
   fi
   
   return 0
@@ -370,12 +374,12 @@ handle_shell_command() {
 # --- End Helpers & Command Handlers ---
 
 # --- Global Variables & State Management ---
-declare -x Profile_Default="${HOME}/.mylocalhost.cnf"
+declare -x Profile_Default="$HOME"/.mylocalhost.cnf
 declare -xg PROFILE='' Database='' DataTable='' PAGER=''
 # State for building SELECT queries
 declare -ga SelectedColumns=('*') # Array of column names, default '*'
-declare -g WhereClause="" OrderClause="" OrderDirection="ASC" LimitClause="100"
-declare -g PromptPrefix="[dbh]"
+declare -g WhereClause='' OrderClause='' OrderDirection='ASC' LimitClause='100'
+declare -g PromptPrefix='[dbh]'
 # History tracking for /history command
 declare -a CommandHistory=()
 
@@ -384,17 +388,17 @@ load_history() {
   CommandHistory=()
 
   local -i old_errexit=0
-  [[ $- == *e* ]] && old_errexit=1
+  [[ $- == *e* ]] && old_errexit=1 ||:
   set +e
 
   history -c
 
   if [[ -r "$DBH_HISTORY_FILE" && -s "$DBH_HISTORY_FILE" ]]; then
-    local line
+    local -- line
     local -i count=0
 
     while IFS= read -r line || [[ -n "$line" ]]; do
-      [[ -z "$line" ]] && continue
+      [[ -n "$line" ]] || continue
 
       CommandHistory+=("$line")
       history -s "$line" 2>/dev/null || true
@@ -403,23 +407,23 @@ load_history() {
 
     history -w "$HISTFILE" 2>/dev/null || true
 
-    [[ $count -gt 0 && -t 1 ]] && info "Loaded $count history entries"
+    ((count)) && [[ -t 1 ]] && info "Loaded $count history entries" ||:
   elif [[ -t 1 ]]; then
-    info "No history file found"
+    info 'No history file found'
   fi
 
-  ((old_errexit)) && set -e
+  ((old_errexit==0)) || set -e
   return 0
 }
 
 # Save history to file
 save_history() {
   local -i old_errexit=0
-  [[ $- == *e* ]] && old_errexit=1
+  [[ $- == *e* ]] && old_errexit=1 ||:
   set +e
 
   if [[ -d "$DBH_CONFIG_DIR" ]]; then
-    if [[ ${#CommandHistory[@]} -eq 0 ]]; then
+    if ((${#CommandHistory[@]}==0)); then
       ((old_errexit)) && set -e
       return 0
     fi
@@ -427,19 +431,19 @@ save_history() {
     local -i result=0
     printf "%s\n" "${CommandHistory[@]}" 2>/dev/null > "$DBH_HISTORY_FILE" || result=$?
 
-    if [[ $result -eq 0 ]]; then
+    if ((result==0)); then
       chmod 600 "$DBH_HISTORY_FILE" 2>/dev/null || true
       if [[ -f "$HISTFILE" ]]; then
         chmod 600 "$HISTFILE" 2>/dev/null || true
       fi
 
-      [[ -t 1 ]] && info "Saved ${#CommandHistory[@]} history entries"
+      [[ -t 1 ]] && info "Saved ${#CommandHistory[@]} history entries" ||:
     fi
   elif [[ -t 2 ]]; then
     warn "Could not save history: Directory $DBH_CONFIG_DIR missing"
   fi
 
-  ((old_errexit)) && set -e
+  ((old_errexit==0)) || set -e
   return 0
 }
 # --- End Globals ---
@@ -461,7 +465,7 @@ save_history() {
 # Side effects:
 #   Prints error message if no database is selected
 require_database() {
-  local custom_error="$1"
+  local custom_error=$1
   
   if [[ -z "$Database" ]]; then
     error "${custom_error:-"No database selected. Use /database first."}"
@@ -480,13 +484,13 @@ require_database() {
 # Side effects:
 #   Prints error message if no database or table is selected
 require_table() {
-  local custom_error="$1"
+  local -- custom_error=$1
   
   # First check database context
   require_database || return 1
   
   if [[ -z "$DataTable" ]]; then
-    error "${custom_error:-"No table selected. Use /table first."}"
+    error "${custom_error:-'No table selected. Use /table first.'}"
     return 1
   fi
   
@@ -500,12 +504,12 @@ xcleanup() {
   
   local -i exitcode=${1:-$?}
   
-  [[ -t 0 ]] && printf '\e[?25h' >&2
+  [[ -t 0 ]] && printf '\e[?25h' >&2 ||:
   save_history
   
-  find "${TMPDIR:-/tmp}" -maxdepth 1 -type f -name "${PRG}.*.????????" -user "$(id -u)" -delete 2>/dev/null || true
+  find "${TMPDIR:-/tmp}" -maxdepth 1 -type f -name "${SCRIPT_NAME}.*.????????" -user "$(id -u)" -delete 2>/dev/null || true
   
-  [[ "$exitcode" -eq 0 || "$exitcode" -gt 128 ]] && exit "$exitcode"
+  ((exitcode==0 || exitcode > 128)) && exit "$exitcode" ||:
   
   return 0
 }
@@ -515,11 +519,11 @@ trap 'xcleanup $?' EXIT TERM INT HUP
 # --- End Cleanup ---
 
 usage() {
-  cat <<EOT
-$PRG v$VERSION - Interactive MySQL client with slash commands, shell access, and direct SQL
+  cat <<HELP
+$SCRIPT_NAME $VERSION - Interactive MySQL client with slash commands, shell access, and direct SQL
 
 Usage:
-  $PRG [Options] [database [table [command]]]
+  $SCRIPT_NAME [Options] [database [table [command]]]
 
   database  Optional: Initial database to connect to
   table     Optional: Initial table to select
@@ -596,7 +600,7 @@ Shell Access:
   /config           Manage configuration settings (show, create, edit, reload)
 
 Examples:
-  $PRG mydb users # Start in mydb.users
+  $SCRIPT_NAME mydb users # Start in mydb.users
   [dbh:mydb:users]> /columns id,name,email
   [dbh:mydb:users]> /where active=1
   [dbh:mydb:users]> /select
@@ -604,8 +608,8 @@ Examples:
   [dbh:mydb:users]> ! ls -la
   [dbh:mydb:users]> /q
 
-EOT
-  (($#)) && exit "${1:-0}"
+HELP
+  (($#==0)) || exit "${1:-0}"
   return 0
 }
 
@@ -652,13 +656,13 @@ set_database_context() {
     
     # Set new database context
     Database="$db_name"
-    DataTable="" # Clear table selection when database changes
+    DataTable='' # Clear table selection when database changes
     PromptPrefix="[dbh:$Database]" # Update prompt to show current context
-    success "Using database '$Database'."
+    success "Using database ${Database@Q}"
     
     # If database has changed, show tables menu
     if [[ "$previous_db" != "$Database" ]]; then
-      info "Showing available tables in '$Database'..."
+      info "Showing available tables in ${Database@Q}..."
       # Show tables but don't return error if user cancels
       handle_cmd_tables || true
     fi
@@ -666,10 +670,10 @@ set_database_context() {
     return 0
   else
     # Database not accessible, reset context
-    Database=""
-    DataTable=""
+    Database=''
+    DataTable=''
     PromptPrefix="[dbh]"
-    error "Cannot use database '$db_name'. Does it exist and do you have access rights?"
+    error "Cannot use database ${db_name@Q}. Does it exist and do you have access rights?"
     return 1
   fi
 }
@@ -710,13 +714,13 @@ set_table_context() {
                                              LIMIT 1;") || table_check_status=$?
   
   if (( table_check_status != 0 )) || [[ -z "$check_output" ]]; then
-    error "Table '$table_name' not found in database '$Database'."
+    error "Table ${table_name@Q} not found in database ${Database@Q}"
     return 1
   else
     # Table exists, set context
     DataTable="$table_name"
     PromptPrefix="[dbh:$Database:$DataTable]" # Update prompt with database and table
-    success "Using table '$DataTable'."
+    success "Using table ${DataTable@Q}"
     return 0
   fi
 }
@@ -736,12 +740,12 @@ set_table_context() {
 go_back_context() {
   if [[ -n "$DataTable" ]]; then 
     # If table is selected, go back to database level
-    DataTable=""
+    DataTable=''
     PromptPrefix="[dbh:$Database]"
-    info "Returned to database '$Database'."
+    info "Returned to database ${Database@Q}"
   elif [[ -n "$Database" ]]; then 
     # If database is selected but no table, go back to top level
-    Database=""
+    Database=''
     PromptPrefix="[dbh]"
     info "Returned to top level."
   else 
@@ -801,7 +805,7 @@ handle_cmd_config() {
   
   case "$subcommand" in
     show)
-      info "---------------- Configuration Settings ----------------"
+      info '---------------- Configuration Settings ----------------'
       info "Configuration file: $DBH_CONFIG_FILE"
       if [[ -r "$DBH_CONFIG_FILE" && -s "$DBH_CONFIG_FILE" ]]; then
         echo
@@ -810,12 +814,12 @@ handle_cmd_config() {
         info "No configuration file found. Create one with '/config create'."
       fi
       echo
-      echo "Available options:"
-      echo "DEFAULT_PROFILE   - MySQL config file path (default: ~/.mylocalhost.cnf)"
-      echo "DEFAULT_DATABASE  - Database to connect to on startup"
-      echo "DEFAULT_LIMIT     - Default limit for SELECT queries (default: 100)"
-      echo "MAX_HISTORY       - Maximum history entries (default: 1000)"
-      echo "PAGER             - Custom pager program (default: less)"
+      echo 'Available options:'
+      echo 'DEFAULT_PROFILE   - MySQL config file path (default: ~/.mylocalhost.cnf)'
+      echo 'DEFAULT_DATABASE  - Database to connect to on startup'
+      echo 'DEFAULT_LIMIT     - Default limit for SELECT queries (default: 100)'
+      echo 'MAX_HISTORY       - Maximum history entries (default: 1000)'
+      echo 'PAGER             - Custom pager program (default: less)'
       ;;
       
     create)
@@ -865,11 +869,11 @@ EOF
       ;;
       
     *)
-      info "Usage: /config [show|create|edit|reload]"
-      info "  show   - Display current configuration"
-      info "  create - Create a default configuration file"
-      info "  edit   - Open the configuration file in an editor"
-      info "  reload - Reload configuration after manual changes"
+      info 'Usage: /config [show|create|edit|reload]'
+      info '  show   - Display current configuration'
+      info '  create - Create a default configuration file'
+      info '  edit   - Open the configuration file in an editor'
+      info '  reload - Reload configuration after manual changes'
       ;;
   esac
   
@@ -877,113 +881,113 @@ EOF
 }
 
 handle_cmd_help() {
-  info "---------------- $PRG v$VERSION Help ----------------"
+  info "---------------- $SCRIPT_NAME v$VERSION Help ----------------"
   info " Context: $PromptPrefix"
   
   # Command Type Summary
   info
-  info " Command Types:"
-  info "  /command          Slash commands for database operations"
-  info "  !command          Shell commands (!alone for interactive shell)"
-  info "  SQL               Direct SQL when not starting with / or !"
+  info ' Command Types:'
+  info '  /command          Slash commands for database operations'
+  info '  !command          Shell commands (!alone for interactive shell)'
+  info '  SQL               Direct SQL when not starting with / or !'
 
   # User Interface
   info
-  info " User Interface:"
-  info "  Color coding      Prompts, messages, and warnings are color-coded"
-  info "  Context-aware     Prompt shows current database and table selection"
-  info "  Configurable      Customize via ~/.config/dbh/config"
-  
+  info ' User Interface:'
+  info '  Color coding      Prompts, messages, and warnings are color-coded'
+  info '  Context-aware     Prompt shows current database and table selection'
+  info '  Configurable      Customize via ~/.config/dbh/config'
+
   # Database Navigation
   info
-  info " Database Navigation:"
-  info "  /help             Show available commands"
-  info "  /databases        List & select database via menu"
-  info "  /database <db>    Directly select database"
-  info "  /tables           List & select table via menu"
-  info "  /table <n>        Directly select table"
-  info "  /.. | /0 | /back  Go back one level (Table->DB->Exit)"
-  info "  /q | /quit | /exit Exit the shell"
+  info ' Database Navigation:'
+  info '  /help             Show available commands'
+  info '  /databases        List & select database via menu'
+  info '  /database <db>    Directly select database'
+  info '  /tables           List & select table via menu'
+  info '  /table <n>        Directly select table'
+  info '  /.. | /0 | /back  Go back one level (Table->DB->Exit)'
+  info '  /q | /quit | /exit Exit the shell'
   
   # Query Building
   info
-  info " Query Building:"
+  info ' Query Building:'
   info "  /columns [cols]   Set columns (Current: $(IFS=,; echo "${SelectedColumns[*]}"))"
   info "  /where [clause]   Set WHERE clause (Current: ${WhereClause:-<None>})"
   info "  /order [cols]     Set ORDER BY (Current: ${OrderClause:-<None>})"
   info "  /asc | /desc      Set direction (Current: $OrderDirection)"
   info "  /limit [num]      Set LIMIT (Current: ${LimitClause:-<None>})"
-  info "  /select           Execute query with current state"
-  info "  /state            Show query state"
-  
+  info '  /select           Execute query with current state'
+  info '  /state            Show query state'
+
   # Table Operations
   info
-  info " Table Operations:"
+  info ' Table Operations:'
   if [[ -n "$DataTable" ]]; then
-    info "  /describe         Structure of '$DataTable'"
-    info "  /structure [v]    Detailed columns (v=vertical)"
-    info "  /status           Status for '$DataTable'"
-    info "  /create           CREATE TABLE statement"
-    info "  /count            Row count"
-    info "  /sample [n]       Show n sample rows (default: 10)"
-    info "  /primary-key      Show primary key columns"
-    info "  /indexes          Show all indexes"
-    info "  /foreign-keys     Show foreign key relationships"
-    info "  /find <text>      Search for text in all columns"
-    info "  /backup [file]    Backup table to SQL file"
+    info "  /describe         Structure of ${DataTable@Q}"
+    info '  /structure [v]    Detailed columns (v=vertical)'
+    info "  /status           Status for ${DataTable@Q}"
+    info '  /create           CREATE TABLE statement'
+    info '  /count            Row count'
+    info '  /sample [n]       Show n sample rows (default: 10)'
+    info '  /primary-key      Show primary key columns'
+    info '  /indexes          Show all indexes'
+    info '  /foreign-keys     Show foreign key relationships'
+    info '  /find <text>      Search for text in all columns'
+    info '  /backup [file]    Backup table to SQL file'
   else
-    info "  /describe         Show table structure (requires table)"
-    info "  /structure [v]    Detailed column info (v=vertical) (requires table)"
-    info "  /status           Show table status (requires table)"
-    info "  /create           Show CREATE statement (requires table)"
-    info "  /count            Show row count (requires table)"
-    info "  /sample [n]       Show n sample rows (requires table)"
-    info "  /primary-key      Show primary key columns (requires table)"
-    info "  /indexes          Show all indexes (requires table)"
-    info "  /foreign-keys     Show foreign key relationships (requires table)"
-    info "  /find <text>      Search for text in all columns (requires table)"
-    info "  /backup [file]    Backup table to SQL file (requires table)"
+    info '  /describe         Show table structure (requires table)'
+    info '  /structure [v]    Detailed column info (v=vertical) (requires table)'
+    info '  /status           Show table status (requires table)'
+    info '  /create           Show CREATE statement (requires table)'
+    info '  /count            Show row count (requires table)'
+    info '  /sample [n]       Show n sample rows (requires table)'
+    info '  /primary-key      Show primary key columns (requires table)'
+    info '  /indexes          Show all indexes (requires table)'
+    info '  /foreign-keys     Show foreign key relationships (requires table)'
+    info '  /find <text>      Search for text in all columns (requires table)'
+    info '  /backup [file]    Backup table to SQL file (requires table)'
   fi
   
   # Database Operations
   info
-  info " Database Operations:"
-  info "  /schema [v]       Show database schema with relationships"
-  info "  /charset          Show character set information"
-  info "  /engines          List available storage engines"
-  info "  /backup [file]    Backup current database to SQL file"
-  
+  info ' Database Operations:'
+  info '  /schema [v]       Show database schema with relationships'
+  info '  /charset          Show character set information'
+  info '  /engines          List available storage engines'
+  info '  /backup [file]    Backup current database to SQL file'
+
   # Administration
   info
-  info " Administration:"
-  info "  /whoami           Show current MySQL user and privileges"
-  info "  /whois [user]     Show information about a specific MySQL user"
-  info "  /users            Show MySQL users and privileges"
-  info "  /processes        Show active MySQL processes"
-  info "  /variables [filter] Display MySQL system variables"
-  info "  /stats            Show database/table statistics"
-  info "  /export [file]    Export query results to file (CSV/SQL/JSON)"
-  info "  /sql <SQL>        Execute arbitrary SQL"
-  info "  /prompt           Open MySQL prompt"
-  
+  info ' Administration:'
+  info '  /whoami           Show current MySQL user and privileges'
+  info '  /whois [user]     Show information about a specific MySQL user'
+  info '  /users            Show MySQL users and privileges'
+  info '  /processes        Show active MySQL processes'
+  info '  /variables [filter] Display MySQL system variables'
+  info '  /stats            Show database/table statistics'
+  info '  /export [file]    Export query results to file (CSV/SQL/JSON)'
+  info '  /sql <SQL>        Execute arbitrary SQL'
+  info '  /prompt           Open MySQL prompt'
+
   # Configuration
   info
-  info " Configuration:"
-  info "  /config show      Show current settings from ~/.config/dbh/config"
-  info "  /config create    Create default configuration file"
-  info "  /config edit      Edit configuration in text editor"
-  info "  /config reload    Apply changes after editing config file"
+  info ' Configuration:'
+  info '  /config show      Show current settings from ~/.config/dbh/config'
+  info '  /config create    Create default configuration file'
+  info '  /config edit      Edit configuration in text editor'
+  info '  /config reload    Apply changes after editing config file'
 
   # Shell Access and History
   info
-  info " Shell Access and History:"
-  info "  !                 Interactive shell (returns to dbh)"
-  info "  !command          Execute shell command"
-  info "  ↑/↓               Use arrow keys to navigate history"
-  info "  !number           Recall command by history number"
-  info "  /history [n]      Show command history (saved across sessions)"
-  
-  info "---------------------------------------------------------------"
+  info ' Shell Access and History:'
+  info '  !                 Interactive shell (returns to dbh)'
+  info '  !command          Execute shell command'
+  info '  ↑/↓               Use arrow keys to navigate history'
+  info '  !number           Recall command by history number'
+  info '  /history [n]      Show command history (saved across sessions)'
+
+  info '---------------------------------------------------------------'
   return 0
 }
 
@@ -1063,13 +1067,13 @@ handle_cmd_tables() {
   
   # Get list of tables securely
   table_list_output=$(mysql_exec "$Database" -Nse "SHOW TABLES;" | sort -i) || { 
-    warn "Could not retrieve tables for '$Database'."
+    warn "Could not retrieve tables for ${Database@Q}"
     return 1
   }
   
   mapfile -t tables <<< "$table_list_output"
   if [[ -z "${tables[*]}" ]]; then 
-    info "No tables found in '$Database'."
+    info "No tables found in ${Database@Q}"
     return 1
   fi
   
@@ -1136,7 +1140,7 @@ handle_cmd_columns() {
     if [[ "$cols_str" == "*" ]]; then
       # Simple case: select all columns
       SelectedColumns=('*')
-      info "Columns set to: *"
+      info 'Columns set to: *'
     else
       # Parse comma-separated list
       local temp_cols=()
@@ -1158,7 +1162,7 @@ handle_cmd_columns() {
       
       # Check if we have any valid columns
       if ((${#SelectedColumns[@]} == 0)); then
-        error "Invalid column input. Setting back to *."
+        error 'Invalid column input. Setting back to *.'
         SelectedColumns=('*')
         return 1
       fi
@@ -1188,7 +1192,7 @@ handle_cmd_columns() {
   mapfile -t available_columns <<< "$column_list_output"
   
   if [[ -z "${available_columns[*]}" ]]; then 
-    error "No columns found in table '$DataTable'."
+    error "No columns found in table ${DataTable@Q}"
     return 1
   fi
   
@@ -1208,11 +1212,11 @@ handle_cmd_columns() {
     # Display the menu with numbers
     echo
     for i in "${!available_columns[@]}"; do
-      local mark=" "
+      local mark=' '
       # Check if this column is already selected
       for sel in "${selected_indices[@]}"; do
         if [[ "$sel" == "$i" ]]; then
-          mark="X"
+          mark='X'
           break
         fi
       done
@@ -1233,8 +1237,8 @@ handle_cmd_columns() {
       0|done) 
         break 
         ;;
-      \?) 
-        echo "Use numbers to select columns, multiple selections allowed."
+      \?)
+        echo 'Use numbers to select columns, multiple selections allowed.'
         echo "Enter 0 or 'done' when finished, q to cancel."
         continue 
         ;;
@@ -1287,7 +1291,7 @@ handle_cmd_columns() {
   # No selection means select all columns
   if [[ ${#selected_indices[@]} -eq 0 ]]; then
     SelectedColumns=('*')
-    info "No columns selected, defaulting to all columns (*)"
+    info 'No columns selected, defaulting to all columns (*)'
   else
     # Process the selections into actual column names
     SelectedColumns=()
@@ -1304,7 +1308,7 @@ handle_cmd_columns() {
   
   # Show final selection
   if [[ "${SelectedColumns[*]}" == "*" ]]; then
-    info "Columns set to: * (All columns)"
+    info 'Columns set to: * (All columns)'
   else
     info "Columns set to: $(IFS=,; echo "${SelectedColumns[*]}")"
   fi
@@ -1324,13 +1328,13 @@ handle_cmd_order() {
 }
 
 handle_cmd_limit() {
-  local limit_input=""; if [[ $# -eq 1 && -n "$1" ]]; then limit_input="$1"; elif [[ $# -ne 1 ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); elif [[ $# -eq 1 && -z "$1" ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); fi
-  if [[ -z "$limit_input" ]]; then LimitClause=""; info "LIMIT cleared."; elif [[ "$limit_input" =~ ^[0-9]+$ ]]; then LimitClause="$limit_input"; info "LIMIT set to: $LimitClause"; else error "Invalid LIMIT value '$limit_input'. Must be a positive number."; return 1; fi
+  local limit_input=''; if [[ $# -eq 1 && -n "$1" ]]; then limit_input="$1"; elif [[ $# -ne 1 ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); elif [[ $# -eq 1 && -z "$1" ]]; then prompt "LIMIT (number or blank to clear): "; read -e -i "$LimitClause" limit_input; limit_input=$(trim "$limit_input"); fi
+  if [[ -z "$limit_input" ]]; then LimitClause=''; info 'LIMIT cleared.'; elif [[ "$limit_input" =~ ^[0-9]+$ ]]; then LimitClause="$limit_input"; info "LIMIT set to: $LimitClause"; else error "Invalid LIMIT value '$limit_input'. Must be a positive number."; return 1; fi
   show_select_state; return 0
 }
 
 handle_cmd_asc_desc() {
-  local direction="$1"; if [[ "$direction" == "desc" ]]; then OrderDirection="DESC"; info "ORDER BY direction set to DESC."; else OrderDirection="ASC"; info "ORDER BY direction set to ASC."; fi
+  local direction="$1"; if [[ "$direction" == 'desc' ]]; then OrderDirection='DESC'; info 'ORDER BY direction set to DESC.'; else OrderDirection='ASC'; info 'ORDER BY direction set to ASC.'; fi
   show_select_state; return 0
 }
 
@@ -1339,11 +1343,11 @@ handle_cmd_select() {
   require_table "No table selected (/table)." || return 1
   
   # Build SQL query safely
-  local sql="SELECT "
-  
+  local sql='SELECT '
+
   # Handle column selection
-  if [[ "${SelectedColumns[*]}" == "*" ]]; then
-    sql+="*"
+  if [[ "${SelectedColumns[*]}" == '*' ]]; then
+    sql+='*'
   else
     local quoted_cols=()
     local col
@@ -1489,7 +1493,7 @@ handle_cmd_create() {
   if [[ -n "$create_statement" ]]; then
     echo "$create_statement" | cut -f2-
   else
-    error "Could not parse CREATE output."
+    error 'Could not parse CREATE output.'
     return 1
   fi
   
@@ -1511,7 +1515,7 @@ handle_cmd_sql() {
   require_database "No database selected (/database)." || return 1
   
   if [[ -z "$sql_command" ]]; then
-    error "Usage: /sql <SQL query...>"
+    error 'Usage: /sql <SQL query...>'
     return 1
   fi
   
@@ -1527,23 +1531,23 @@ handle_cmd_sql() {
     fi
   fi
   
-  info "Executing SQL in '$Database': $sql_command"
+  info "Executing SQL in ${Database@Q}: $sql_command"
   mysql_exec "$Database" -e "$sql_command"
   return $?
 }
 
 handle_cmd_prompt() {
   require_database "No database selected (/database)." || return 1
-  info "Launching interactive MySQL prompt for database '$Database'..."; info "Type 'exit' or 'quit' to return to $PRG."; stty sane
-  if ! mysql --defaults-file="$PROFILE" --no-auto-rehash --prompt="[$PRG:$Database] mysql> " "$Database"; then error "MySQL interactive session exited."; fi
-  stty sane; clear; info "Returned to $PRG. Current context: $PromptPrefix"; bind '"\e[0n": redraw-current-line'; printf '\e[0n' > /dev/tty; return 0
+  info "Launching interactive MySQL prompt for database ${Database@Q}..."; info "Type 'exit' or 'quit' to return to $SCRIPT_NAME."; stty sane
+  if ! mysql --defaults-file="$PROFILE" --no-auto-rehash --prompt="[$SCRIPT_NAME:$Database] mysql> " "$Database"; then error "MySQL interactive session exited."; fi
+  stty sane; clear; info "Returned to $SCRIPT_NAME. Current context: $PromptPrefix"; bind '"\e[0n": redraw-current-line'; printf '\e[0n' > /dev/tty; return 0
 }
 
 # Display sample rows from the current table
 handle_cmd_sample() {
   require_table || return 1
 
-  local num_rows="10" # Default number of rows
+  local num_rows='10' # Default number of rows
   local quoted_table
   quoted_table=$(quote_ident "$DataTable")
   
@@ -1551,7 +1555,7 @@ handle_cmd_sample() {
   if [[ -n "$1" && "$1" =~ ^[0-9]+$ ]]; then
     num_rows="$1"
   elif [[ -n "$1" && ! "$1" =~ ^[0-9]+$ ]]; then
-    warn "Invalid number of rows: '$1'. Using default ($num_rows)."
+    warn "Invalid number of rows ${1@Q}. Using default ($num_rows)."
   fi
   
   info "Showing $num_rows sample rows from '$Database.$DataTable':"
@@ -1603,7 +1607,7 @@ handle_cmd_primary_key() {
   
   if (( exit_code == 0 )); then
     if [[ -z "$result" ]]; then
-      info "No primary key defined for table '$DataTable'."
+      info "No primary key defined for table ${DataTable@Q}"
     else
       echo "$result"
     fi
@@ -1653,12 +1657,12 @@ handle_cmd_find() {
     prompt "Enter text to search for: "
     read -e search_text
     if [[ -z "$search_text" ]]; then
-      error "No search text provided."
+      error 'No search text provided.'
       return 1
     fi
   fi
   
-  info "Searching for '$search_text' in '$Database.$DataTable':"
+  info "Searching for ${search_text@Q} in '$Database.$DataTable':"
   
   # Get column list from the table for building query
   local column_list
@@ -1672,7 +1676,7 @@ handle_cmd_find() {
   mapfile -t columns < <(echo "$column_list" | awk '{print $1}')
   
   if [[ ${#columns[@]} -eq 0 ]]; then
-    error "No columns found in table '$DataTable'."
+    error "No columns found in table ${DataTable@Q}"
     return 1
   fi
   
@@ -1726,7 +1730,7 @@ handle_cmd_history() {
   if [[ -n "$1" && "$1" =~ ^[0-9]+$ ]]; then
     count="$1"
   elif [[ -n "$1" && ! "$1" =~ ^[0-9]+$ ]]; then
-    warn "Invalid count: '$1'. Using default ($count)."
+    warn "Invalid count ${1@Q}. Using default ($count)."
   fi
   
   # Display history file info
@@ -1752,10 +1756,10 @@ handle_cmd_history() {
   fi
   
   echo
-  info "To navigate history:"
-  info "- Use UP/DOWN arrow keys to scroll through commands"
-  info "- Use !N to execute command number N (e.g., !5)"
-  info "History is persistent across sessions"
+  info 'To navigate history:'
+  info '- Use UP/DOWN arrow keys to scroll through commands'
+  info '- Use !N to execute command number N (e.g., !5)'
+  info 'History is persistent across sessions'
   
   return 0
 }
@@ -1771,17 +1775,17 @@ handle_cmd_schema() {
     vertical_format=1
   fi
   
-  info "Database schema for '$Database':"
+  info "Database schema for ${Database@Q}:"
   
   # First, get a list of all tables
   local tables_list
   tables_list=$(mysql_exec "$Database" -Nse "SHOW TABLES;" | sort -i) || { 
-    error "Could not retrieve tables for '$Database'."
+    error "Could not retrieve tables for ${Database@Q}"
     return 1
   }
   
   if [[ -z "$tables_list" ]]; then
-    info "No tables found in '$Database'."
+    info "No tables found in ${Database@Q}"
     return 0
   fi
   
@@ -1812,11 +1816,11 @@ handle_cmd_schema() {
     # Vertical format
     if (( use_pager )); then
       local schema_file
-      schema_file=$(create_secure_tempfile "${PRG}.schema")
+      schema_file=$(create_secure_tempfile "${SCRIPT_NAME}.schema")
       
       {
         # Introduction
-        echo "Foreign key relationships in database '$Database':"
+        echo "Foreign key relationships in database ${Database@Q}:"
         echo "-------------------------------------------------"
         echo
         
@@ -1835,7 +1839,7 @@ handle_cmd_schema() {
       stty sane 2>/dev/null || true
     else
       # Direct output without pager
-      echo "Foreign key relationships in database '$Database':"
+      echo "Foreign key relationships in database ${Database@Q}:"
       echo "-------------------------------------------------"
       echo
       mysql_exec "$Database" -e "$query\G"
@@ -1844,11 +1848,11 @@ handle_cmd_schema() {
     # Tabular format
     if (( use_pager )); then
       local schema_file
-      schema_file=$(create_secure_tempfile "${PRG}.schema")
+      schema_file=$(create_secure_tempfile "${SCRIPT_NAME}.schema")
       
       {
         # Introduction
-        echo "Foreign key relationships in database '$Database':"
+        echo "Foreign key relationships in database ${Database@Q}:"
         echo "-------------------------------------------------"
         echo
         
@@ -1867,7 +1871,7 @@ handle_cmd_schema() {
       stty sane 2>/dev/null || true
     else
       # Direct output without pager
-      echo "Foreign key relationships in database '$Database':"
+      echo "Foreign key relationships in database ${Database@Q}:"
       echo "-------------------------------------------------"
       echo
       mysql_exec "$Database" --table -e "$query"
@@ -1947,7 +1951,7 @@ handle_cmd_foreign_keys() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local fk_file
-    fk_file=$(create_secure_tempfile "${PRG}.fk")
+    fk_file=$(create_secure_tempfile "${SCRIPT_NAME}.fk")
     
     {
       echo "Foreign keys FROM this table to other tables:"
@@ -1994,17 +1998,17 @@ handle_cmd_backup() {
   require_database || return 1
   
   # Determine what to backup (table or database)
-  local backup_type="database"
+  local backup_type='database'
   local backup_name="$Database"
 
   if [[ -n "$DataTable" ]]; then
-    backup_type="table"
+    backup_type='table'
     backup_name="$Database.$DataTable"
   fi
   
   # Default filename if not provided
   if [[ -z "$output_file" ]]; then
-    if [[ "$backup_type" == "table" ]]; then
+    if [[ "$backup_type" == 'table' ]]; then
       output_file="${Database}_${DataTable}_${current_time}.sql"
     else
       output_file="${Database}_${current_time}.sql"
@@ -2013,11 +2017,11 @@ handle_cmd_backup() {
   
   # Check if mysqldump is available
   if ! command -v mysqldump > /dev/null; then
-    error "mysqldump command not found. Cannot create backup."
+    error 'mysqldump command not found. Cannot create backup.'
     return 1
   fi
   
-  info "Creating backup of $backup_type '$backup_name' to file '$output_file'..."
+  info "Creating backup of $backup_type ${backup_name@Q} to file ${output_file@Q}..."
 
   # Build mysqldump command as array for safe execution
   local -a dump_cmd=(mysqldump "--defaults-file=$PROFILE" --add-drop-table --routines --triggers "$Database")
@@ -2029,7 +2033,7 @@ handle_cmd_backup() {
 
   # Execute the dump command
   if "${dump_cmd[@]}" > "$output_file"; then
-    success "Backup completed successfully to '$output_file'."
+    success "Backup completed successfully to ${output_file@Q}"
     info "File size: $(du -h "$output_file" | cut -f1)"
   else
     error "Backup failed with status $?."
@@ -2051,8 +2055,8 @@ handle_cmd_charset() {
   
   local target="server"
   local query_server="SHOW VARIABLES LIKE 'character\\_set\\_%';"
-  local query_db=""
-  local query_table=""
+  local query_db=''
+  local query_table=''
   
   # If a database is selected, also show database charset
   if [[ -n "$Database" ]]; then
@@ -2084,7 +2088,7 @@ handle_cmd_charset() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local charset_file
-    charset_file=$(create_secure_tempfile "${PRG}.charset")
+    charset_file=$(create_secure_tempfile "${SCRIPT_NAME}.charset")
     
     {
       echo "Character Set Information for $target:"
@@ -2165,7 +2169,7 @@ handle_cmd_engines() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local engines_file
-    engines_file=$(create_secure_tempfile "${PRG}.engines")
+    engines_file=$(create_secure_tempfile "${SCRIPT_NAME}.engines")
     
     # Output to temp file
     mysql --defaults-file="$PROFILE" --no-auto-rehash \
@@ -2187,7 +2191,7 @@ handle_cmd_engines() {
   # If a database is selected, show engine usage
   if [[ -n "$Database" ]]; then
     echo
-    echo "Storage engines used in database '$Database':"
+    echo "Storage engines used in database ${Database@Q}:"
     
     local query_engines
     query_engines="SELECT 
@@ -2248,10 +2252,10 @@ handle_cmd_whois() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local whois_file
-    whois_file=$(create_secure_tempfile "${PRG}.whois")
+    whois_file=$(create_secure_tempfile "${SCRIPT_NAME}.whois")
     
     {
-      echo "User Information for '$user_name'@'$host_name':"
+      echo "User Information for ${user_name@Q}@${host_name@Q}:"
       echo "-----------------------------------------"
       echo
       
@@ -2451,7 +2455,7 @@ handle_cmd_whoami() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local whoami_file
-    whoami_file=$(create_secure_tempfile "${PRG}.whoami")
+    whoami_file=$(create_secure_tempfile "${SCRIPT_NAME}.whoami")
     
     {
       echo "Current MySQL User:"
@@ -2612,7 +2616,7 @@ handle_cmd_users() {
   if (( use_pager )); then
     # Create a temporary file for all output to avoid piping issues
     local users_file
-    users_file=$(create_secure_tempfile "${PRG}.users")
+    users_file=$(create_secure_tempfile "${SCRIPT_NAME}.users")
     
     {
       echo "MySQL Users:"
@@ -2635,7 +2639,7 @@ handle_cmd_users() {
       # If a database is selected, also show table privileges
       if [[ -n "$Database" ]]; then
         echo
-        echo "Table Privileges for database '$Database':"
+        echo "Table Privileges for database ${Database@Q}:"
         echo "-------------------------------------"
         local query_table_privs
         query_table_privs="SELECT 
@@ -2690,7 +2694,7 @@ handle_cmd_users() {
     # If a database is selected, also show table privileges
     if [[ -n "$Database" ]]; then
       echo
-      echo "Table Privileges for database '$Database':"
+      echo "Table Privileges for database ${Database@Q}:"
       echo "-------------------------------------"
       local query_table_privs
       query_table_privs="SELECT 
@@ -2734,7 +2738,7 @@ handle_cmd_processes() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local proc_file
-    proc_file=$(create_secure_tempfile "${PRG}.procs")
+    proc_file=$(create_secure_tempfile "${SCRIPT_NAME}.procs")
     
     # Output to temp file
     mysql --defaults-file="$PROFILE" --no-auto-rehash \
@@ -2766,7 +2770,7 @@ handle_cmd_variables() {
   
   if [[ -n "$filter" ]]; then
     # If a filter is provided, use it to narrow down the variables
-    info "MySQL System Variables (filtered by '$filter'):"
+    info "MySQL System Variables (filtered by ${filter@Q}):"
     query="SHOW VARIABLES WHERE Variable_name LIKE '%$(mysql_exec -e "SELECT $(escape_sql_value "$filter");" | tr -d "'")%';"
   else
     # Otherwise show all variables
@@ -2783,7 +2787,7 @@ handle_cmd_variables() {
   # Execute with appropriate formatting and paging
   if (( use_pager )); then
     local vars_file
-    vars_file=$(create_secure_tempfile "${PRG}.vars")
+    vars_file=$(create_secure_tempfile "${SCRIPT_NAME}.vars")
     
     # Output to temp file
     mysql --defaults-file="$PROFILE" --no-auto-rehash \
@@ -2812,10 +2816,10 @@ handle_cmd_export() {
   require_table || return 1
   
   # Parse arguments safely
-  local filename=""
-  local format="csv"  # Default format
+  local filename=''
+  local format='csv'  # Default format
   local include_headers=1
-  local delimiter=","
+  local delimiter=','
   
   # Create a safely quoted version of the arguments for processing
   local args=()
@@ -2872,13 +2876,13 @@ handle_cmd_export() {
   # Validate format
   case "$format" in
     csv|CSV)
-      format="csv"
+      format='csv'
       ;;
     sql|SQL)
-      format="sql"
+      format='sql'
       ;;
     json|JSON)
-      format="json"
+      format='json'
       ;;
     *)
       error "Unsupported format: $format. Use csv, sql, or json."
@@ -2887,11 +2891,11 @@ handle_cmd_export() {
   esac
   
   # Build the SQL query
-  local sql="SELECT "
-  
+  local sql='SELECT '
+
   # Handle column selection
-  if [[ "${SelectedColumns[*]}" == "*" ]]; then
-    sql+="*"
+  if [[ "${SelectedColumns[*]}" == '*' ]]; then
+    sql+='*'
   else
     local quoted_cols=()
     local col
@@ -2932,13 +2936,13 @@ handle_cmd_export() {
     fi
   fi
   
-  info "Exporting data from '$Database.$DataTable' to '$filename' in $format format..."
+  info "Exporting data from '$Database.$DataTable' to ${filename@Q} in $format format..."
   
   # Export based on format
   case "$format" in
     csv)
       # Export as CSV
-      local mysql_args=""
+      local mysql_args=''
       if (( include_headers )); then
         mysql_args+=" -B"  # Include column names as first row
       else
@@ -2948,7 +2952,7 @@ handle_cmd_export() {
       # Need to handle custom delimiter
       if [[ "$delimiter" != "," ]]; then
         local temp_file
-        temp_file=$(create_secure_tempfile "${PRG}.export")
+        temp_file=$(create_secure_tempfile "${SCRIPT_NAME}.export")
         # shellcheck disable=SC2086
         mysql --defaults-file="$PROFILE" --no-auto-rehash "$Database" ${mysql_args} -e "$sql" > "$temp_file"
         if [[ "$delimiter" == "tab" || "$delimiter" == "\t" ]]; then
@@ -2987,7 +2991,7 @@ handle_cmd_export() {
       # Export as JSON
       # Use a temporary file for intermediate results
       local temp_file
-      temp_file=$(create_secure_tempfile "${PRG}.export")
+      temp_file=$(create_secure_tempfile "${SCRIPT_NAME}.export")
       
       # Get column names first for JSON object keys
       local columns_list
@@ -3015,7 +3019,7 @@ handle_cmd_export() {
         
         local -i field_count=0
         for i in "${!values[@]}"; do
-          if (( i < ${#columns[@]} )); then
+          if ((i < ${#columns[@]})); then
             if (( field_count > 0 )); then
               echo -n "," >> "$filename"
             fi
@@ -3028,7 +3032,7 @@ handle_cmd_export() {
           fi
         done
 
-        echo -n "}" >> "$filename"
+        echo -n '}' >> "$filename"
         line_count+=1
       done < "$temp_file"
       echo -e "\n]" >> "$filename"
@@ -3039,7 +3043,7 @@ handle_cmd_export() {
   
   # Check if the file was created successfully
   if [[ -f "$filename" ]]; then
-    success "Export completed to '$filename'."
+    success "Export completed to ${filename@Q}"
     info "Exported $(wc -l < "$filename") rows."
     info "File size: $(du -h "$filename" | cut -f1)"
   else
@@ -3094,7 +3098,7 @@ handle_cmd_stats() {
     if (( use_pager )); then
       # Create a temporary file for all output to avoid piping issues
       local stats_file
-      stats_file=$(create_secure_tempfile "${PRG}.stats")
+      stats_file=$(create_secure_tempfile "${SCRIPT_NAME}.stats")
       
       {
         echo "Table Statistics for '$Database.$DataTable':"
@@ -3161,7 +3165,7 @@ handle_cmd_stats() {
     fi
   else
     # Database-wide statistics
-    info "Statistics for database '$Database':"
+    info "Statistics for database ${Database@Q}:"
     
     # Get tables stats
     local query_tables
@@ -3193,18 +3197,18 @@ handle_cmd_stats() {
     if (( use_pager )); then
       # Create a temporary file for all output to avoid piping issues
       local stats_file
-      stats_file=$(create_secure_tempfile "${PRG}.stats")
+      stats_file=$(create_secure_tempfile "${SCRIPT_NAME}.stats")
       
       {
-        echo "Database Statistics for '$Database':"
+        echo "Database Statistics for ${Database@Q}:"
         echo "---------------------------------"
         echo
-        echo "Database Size Summary:"
+        echo 'Database Size Summary:'
         mysql --defaults-file="$PROFILE" --no-auto-rehash \
           --table -e "$query_size"
         
         echo
-        echo "Table Statistics (sorted by size):"
+        echo 'Table Statistics (sorted by size):'
         mysql --defaults-file="$PROFILE" --no-auto-rehash \
           --table -e "$query_tables"
       } > "$stats_file"
@@ -3219,14 +3223,14 @@ handle_cmd_stats() {
       stty sane 2>/dev/null || true
     else
       # Direct output without pager
-      echo "Database Statistics for '$Database':"
-      echo "---------------------------------"
+      echo "Database Statistics for ${Database@Q}:"
+      echo '---------------------------------'
       echo
-      echo "Database Size Summary:"
+      echo 'Database Size Summary:'
       mysql_exec --table -e "$query_size"
       
       echo
-      echo "Table Statistics (sorted by size):"
+      echo 'Table Statistics (sorted by size):'
       mysql_exec --table -e "$query_tables"
     fi
   fi
@@ -3266,11 +3270,10 @@ main() {
   load_config
   
   while (($#)); do 
-    case "$1" in 
+    case $1 in
       -p|--profile)
-        noarg "$@"
-        shift
-        PROFILE="$1"
+        noarg "$@"; shift
+        PROFILE=$1
         ;;
       -v|--verbose)
         VERBOSE+=1
@@ -3279,7 +3282,7 @@ main() {
         VERBOSE=0
         ;;
       -V|--version)
-        echo "$PRG v$VERSION"
+        echo "$SCRIPT_NAME $VERSION"
         exit 0
         ;;
       -h|--help)
@@ -3288,7 +3291,7 @@ main() {
       # Handle combined short options (e.g., -vq)
       -[pvqhV]*)
         # Loop through each character and add as separate option
-        local char
+        local -- char
         for char in $(echo "${1:1}" | grep -o .); do
           set -- "$@" "-$char"
         done
@@ -3300,16 +3303,16 @@ main() {
         break
         ;;
       -*)
-        usage 22 "Invalid option '$1'"
+        usage 22 "Invalid option ${1@Q}"
         ;;
       *)
         # Positional arguments
         if [[ -z "$Database" ]]; then
-          Database="$1"
+          Database=$1
         elif [[ -z "$DataTable" ]]; then
-          DataTable="$1"
+          DataTable=$1
         else
-          usage 22 "Too many arguments: '$1'"
+          usage 22 "Too many arguments ${1@Q}"
         fi
         ;;
     esac
@@ -3319,11 +3322,11 @@ main() {
   # Process any remaining arguments
   while (($#)); do
     if [[ -z "$Database" ]]; then
-      Database="$1"
+      Database=$1
     elif [[ -z "$DataTable" ]]; then
-      DataTable="$1"
+      DataTable=$1
     else
-      usage 22 "Too many arguments: '$1'"
+      usage 22 "Too many arguments ${1@Q}"
     fi
     shift
   done
@@ -3335,23 +3338,23 @@ main() {
   fi
   
   # Store original path for error messages
-  local profile_path="$PROFILE"
+  local -- profile_path="$PROFILE"
   
   # Try relative path if profile not found and path isn't absolute
   if ! [[ -f "$PROFILE" ]] && [[ "$PROFILE" != /* ]]; then
     # Expand tilde if present
     if [[ "$PROFILE" == \~* ]]; then
       PROFILE="${HOME}${PROFILE:1}"
-      debug "Expanded tilde in profile path: $PROFILE"
+      debug "Expanded tilde in profile path ${PROFILE@Q}"
     # Try relative to program directory
-    elif [[ -f "$SCRIPT_DIR/$PROFILE" ]]; then
-      PROFILE="$SCRIPT_DIR/$PROFILE"
-      debug "Found profile at relative path: $PROFILE"
+    elif [[ -f "$SCRIPT_DIR"/"$PROFILE" ]]; then
+      PROFILE="$SCRIPT_DIR"/"$PROFILE"
+      debug "Found profile at relative path ${PROFILE@Q}"
     fi
   fi
 
   # Find the canonical profile path
-  local resolved_profile=""
+  local -- resolved_profile=''
   local -i resolve_status=1 # Default to failure
   
   # Attempt path resolution with realpath or readlink
@@ -3361,33 +3364,33 @@ main() {
     resolve_status=$?
     
     if (( resolve_status != 0 )); then
-      warn "Could not resolve profile path with realpath: '$profile_path'"
+      warn "Could not resolve profile path with realpath ${profile_path@Q}"
     else
-      debug "Resolved profile path using realpath: $resolved_profile"
+      debug "Resolved profile path using realpath ${resolved_profile@Q}"
     fi
   fi
   
   # Fall back to readlink if realpath failed or wasn't available
   if (( resolve_status != 0 )) && command -v readlink >/dev/null; then
-    debug "Attempting to resolve profile path with readlink"
+    debug 'Attempting to resolve profile path with readlink'
     resolved_profile=$(readlink -m -- "$PROFILE" 2>/dev/null)
     resolve_status=$?
     
     if (( resolve_status != 0 )); then
-      warn "Could not resolve profile path with readlink: '$profile_path'"
+      warn "Could not resolve profile path with readlink ${profile_path@Q}"
     else
-      debug "Resolved profile path using readlink: $resolved_profile"
+      debug "Resolved profile path using readlink ${resolved_profile@Q}"
     fi
   fi
   
   # Last resort: use the original path if it exists
   if (( resolve_status != 0 )); then
     if [[ -f "$PROFILE" ]]; then
-      warn "Using unresolved profile path: '$PROFILE'"
-      resolved_profile="$PROFILE"
+      warn "Using unresolved profile path ${PROFILE@Q}"
+      resolved_profile=$PROFILE
       resolve_status=0
     else
-      die 1 "Could not find or access profile at path: '$profile_path'"
+      die 1 "Could not find or access profile at path ${profile_path@Q}"
     fi
   fi
   
@@ -3396,23 +3399,23 @@ main() {
   
   # Final check: Does the resolved path exist as a file?
   if [[ ! -f "$PROFILE" ]]; then
-    die 2 "Profile file not found: '$PROFILE' (original: '$profile_path')"
+    die 2 "Profile file not found ${PROFILE@Q} (original: ${profile_path@Q})"
   fi
   
   # Check if profile is readable
   if [[ ! -r "$PROFILE" ]]; then
-    die 2 "Profile file exists but is not readable: '$PROFILE'"
+    die 2 "Profile file exists but is not readable ${PROFILE@Q}"
   fi
   
-  debug "Using MySQL profile: $PROFILE"
+  debug "Using MySQL profile ${PROFILE@Q}"
 
   # --- Prerequisite Checks ---
   command -v mysql >/dev/null || die 1 "MySQL client 'mysql' not found."
-  (( VERBOSE > 0 )) && info "Checking initial connection..."
+  ((VERBOSE)) && info "Checking initial connection..."
   local init_check_status=0
-  mysql_exec -e "SELECT 1;" >/dev/null || init_check_status=$? # Suppress "1" output
-  if (( init_check_status != 0 )); then die 1 "Initial connection failed using profile '$PROFILE'. Check errors."; fi
-  (( VERBOSE > 0 )) && success "Connection successful." && info "Using profile '$PROFILE'"
+  mysql_exec -e 'SELECT 1;' >/dev/null || init_check_status=$? # Suppress "1" output
+  if (( init_check_status != 0 )); then die 1 "Initial connection failed using profile ${PROFILE@Q}. Check errors."; fi
+  ((VERBOSE)) && success "Connection successful." && info "Using profile ${PROFILE@Q}"
 
   # --- Load command history ---
   load_history
@@ -3429,10 +3432,10 @@ main() {
 
   # --- Startup Behavior: Ensure Database is Selected ---
   if (( InteractiveMode )) && [[ -z "$Database" ]]; then
-    info "No initial database selected. Please choose one:"
+    info 'No initial database selected. Please choose one:'
     handle_cmd_databases || true # Prevent exit if user cancels selection
     # If still no DB after menu (user cancelled), exit cleanly.
-    [[ -z "$Database" ]] && { info "No database selected. Exiting."; exit 0; }
+    [[ -n "$Database" ]] || { info "No database selected. Exiting."; exit 0; }
   fi
 
   # --- Interactive Mode Loop ---
@@ -3441,22 +3444,23 @@ main() {
   
   # Detect non-interactive mode
   if ! [[ -t 0 ]]; then
-    info "Detected non-interactive mode (input from pipe)"
+    info 'Detected non-interactive mode (input from pipe)'
   fi
   
   # Start the interactive loop
-  while true; do
+  while :; do
       # Check if read returns non-zero (EOF)
       prompt "$PromptPrefix> "
       if ! read -e input; then 
-        info "EOF detected. Exiting."; 
-        echo; 
+        info 'EOF detected. Exiting.'
+        echo
         break
       fi
-      input=$(trim "$input"); [[ -z "$input" ]] && continue
+      input=$(trim "$input")
+      [[ -n "$input" ]] || continue
       
       # Add to history (skip exit/history/config commands)
-      if [[ "$input" != "/history" && "$input" != "/config" && "$input" != "/q" && "$input" != "/quit" && "$input" != "/exit" ]]; then
+      if [[ "$input" != '/history' && "$input" != '/config' && "$input" != '/q' && "$input" != '/quit' && "$input" != '/exit' ]]; then
         CommandHistory+=("$input")
         history -s "$input" 2>/dev/null || true
         history -w "$HISTFILE" 2>/dev/null || true
@@ -3464,19 +3468,19 @@ main() {
     # First check for history recall with !number
     if [[ "$input" =~ ^![0-9]+$ ]]; then
       # Extract the history number
-      local history_num="${input:1}"
+      local -- history_num=${input:1}
       # Check if it's in our tracked history
       if [[ $history_num -gt 0 && $history_num -le ${#CommandHistory[@]} ]]; then
         # Get the command from our history (adjust for 0-based array)
-        local history_cmd="${CommandHistory[$((history_num-1))]}"
+        local -- history_cmd="${CommandHistory[$((history_num-1))]}"
         info "Recalling command: $history_cmd"
         # Set the input to the recalled command and continue processing
-        input="$history_cmd"
+        input=$history_cmd
         # Add to history and continue with normal processing
         CommandHistory+=("$input")
       else
         # Let the shell's built-in history expansion handle it
-        info "Using shell history recall"
+        info 'Using shell history recall'
         # We'll fall through to shell command handling (!command)
       fi
     fi
@@ -3484,20 +3488,20 @@ main() {
     # Process input based on first character
     if [[ "$input" =~ ^/ ]]; then
       # Handle slash commands (/command)
-      raw_cmd="${input:1}";
+      raw_cmd=${input:1}
       if [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)[[:space:]]+(.*)$ ]]; then 
-        cmd="${BASH_REMATCH[1]}"
-        args="${BASH_REMATCH[2]}"
+        cmd=${BASH_REMATCH[1]}
+        args=${BASH_REMATCH[2]}
       elif [[ "$raw_cmd" =~ ^([a-zA-Z0-9_?]+)$ ]]; then 
-        cmd="$raw_cmd"
-        args=""
+        cmd=$raw_cmd
+        args=''
       elif [[ "$raw_cmd" =~ ^(\.\.|0|back)$ ]]; then 
-        cmd="$raw_cmd"
-        args=""
+        cmd=$raw_cmd
+        args=''
       elif [[ -z "$raw_cmd" ]]; then 
         continue
       else
-        error "Invalid command format: '$input'"
+        error "Invalid command format ${input@Q}"
         continue
       fi
       
@@ -3551,12 +3555,12 @@ main() {
         prompt)         handle_cmd_prompt || true ;;
         # Navigation
         ..|0|back)      go_back_context || true ;;
-        q|quit|exit)    info "Exiting."; break ;; # Exit loop cleanly
+        q|quit|exit)    info 'Exiting.'; break ;; # Exit loop cleanly
         *)              error "Unknown command '/$cmd'. Type '/help' for options." ;;
       esac
     elif [[ "$input" =~ ^! ]]; then
       # Handle shell commands (!command)
-      if [[ "$input" == "!" ]]; then
+      if [[ "$input" == '!' ]]; then
         # Just '!' launches interactive shell
         handle_shell_command || true
       else
@@ -3572,16 +3576,17 @@ main() {
     else
       # Treat as direct SQL command if a database is selected
       if [[ -n "$Database" ]]; then
-        info "Executing SQL in '$Database': $input"
+        info "Executing SQL in ${Database@Q}: $input"
         mysql_run_display "$Database" --table -e "$input" || true
       else
-        error "No database selected. Select a database with /database first, or use / or ! commands."
+        error 'No database selected. Select a database with /database first, or use / or ! commands.'
         info "Type '/help' for available commands or '/databases' to select a database."
       fi
     fi
   done # End while loop
-  success "Exiting."
+  success 'Exiting.'
 }
+
 # --- Script Entry Point ---
 main "$@"
 #fin
