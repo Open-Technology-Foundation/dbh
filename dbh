@@ -95,7 +95,7 @@ load_config() {
   fi
 
   # Restore original errexit state
-  ((old_errexit)) || set -e
+  ((old_errexit)) && set -e
   return 0
 }
 
@@ -412,7 +412,7 @@ load_history() {
     info 'No history file found'
   fi
 
-  ((old_errexit)) || set -e
+  ((old_errexit)) && set -e
   return 0
 }
 
@@ -443,7 +443,7 @@ save_history() {
     warn "Could not save history: Directory $DBH_CONFIG_DIR missing"
   fi
 
-  ((old_errexit)) || set -e
+  ((old_errexit)) && set -e
   return 0
 }
 # --- End Globals ---
