@@ -1,0 +1,497 @@
+.\" dbh.1 - Manpage for dbh MySQL database helper
+.\" Copyright (C) 2023-2025 Open Technology Foundation
+.\" License: GPL-3.0
+.\"
+.TH DBH 1 "January 2025" "dbh 3.7.1" "User Commands"
+.\"
+.SH NAME
+dbh \- interactive MySQL database helper
+.\"
+.SH SYNOPSIS
+.B dbh
+.RI [ OPTIONS ]
+.RI [ database
+.RI [ table
+.RI [ command ]]]
+.\"
+.SH DESCRIPTION
+.B dbh
+is an interactive MySQL database explorer providing hierarchical
+database and table navigation with slash commands, shell integration,
+and direct SQL execution.
+.PP
+Features include:
+.IP \(bu 3
+Interactive hierarchical database/table navigation with
+.B /commands
+.IP \(bu 3
+Color-coded interface with context-aware prompts
+.IP \(bu 3
+Query building with columnar selection and filtering
+.IP \(bu 3
+SQL execution and formatting with secure parameter handling
+.IP \(bu 3
+Shell command access with
+.B !
+prefix while maintaining context
+.IP \(bu 3
+Configuration system via
+.I ~/.config/dbh/config
+.IP \(bu 3
+Persistent command history with readline/arrow key support
+.IP \(bu 3
+Database schema exploration and visualization
+.IP \(bu 3
+Table structure and relationship analysis
+.IP \(bu 3
+Export capabilities (CSV, SQL, JSON formats)
+.IP \(bu 3
+Security features including SQL injection prevention
+.\"
+.SH OPTIONS
+.TP
+.BR \-p ", " \-\-profile " " \fIFILE\fR
+MySQL configuration file. Default:
+.IR ~/.mylocalhost.cnf .
+.TP
+.BR \-v ", " \-\-verbose
+Increase verbosity of output.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress non-error messages.
+.TP
+.BR \-V ", " \-\-version
+Print version information and exit.
+.TP
+.BR \-h ", " \-\-help
+Display help message and exit.
+.\"
+.SH COMMAND TYPES
+.B dbh
+recognizes three types of input:
+.TP
+.B /command
+Slash commands for database operations. Dispatched to internal handlers.
+.TP
+.B !command
+Shell commands. Use
+.B !
+alone for an interactive shell session.
+.TP
+.B SQL
+Direct SQL execution. Any input not starting with
+.B /
+or
+.B !
+is executed as SQL.
+.TP
+.B !number
+Recall and execute a command from history by its number.
+.\"
+.SH COMMANDS
+.SS Navigation Commands
+.TP
+.BR /help ", " /?
+Display available commands and current context.
+.TP
+.B /databases
+List all accessible databases and select via interactive menu.
+.TP
+.BI /database " " NAME
+Directly select the specified database.
+.TP
+.B /tables
+List tables in current database and select via interactive menu.
+.TP
+.BI /table " " NAME
+Directly select the specified table.
+.TP
+.BR /.. ", " /0 ", " /back
+Go back one level in the hierarchy (Table \[->] Database \[->] Exit).
+.TP
+.BR /q ", " /quit ", " /exit
+Exit dbh.
+.\"
+.SS Query Building Commands
+.TP
+.BI /columns " " \fR[\fIcols\fR]
+Set columns for SELECT query. Without arguments, displays an interactive
+multi-select menu. Specify columns as comma-separated list.
+.TP
+.BI /where " " \fR[\fIclause\fR]
+Set the WHERE clause. Without arguments, clears the current clause.
+.TP
+.BI /order " " \fR[\fIcols\fR]
+Set ORDER BY columns. Without arguments, clears the current order.
+.TP
+.B /asc
+Set sort direction to ascending (default).
+.TP
+.B /desc
+Set sort direction to descending.
+.TP
+.BI /limit " " \fR[\fIn\fR]
+Set row limit for queries. Without arguments, clears the limit.
+.TP
+.B /select
+Execute the built query with current column, where, order, and limit state.
+.TP
+.B /state
+Display the current query building state (columns, where, order, limit).
+.\"
+.SS Table Operations
+These commands require a table to be selected.
+.TP
+.B /describe
+Show table structure using
+.BR "DESCRIBE TABLE" .
+.TP
+.BI /structure " " \fR[\fIv\fR]
+Show detailed column information. Use
+.B v
+for vertical output format.
+.TP
+.B /status
+Display table status information.
+.TP
+.B /create
+Show the
+.B CREATE TABLE
+statement for the current table.
+.TP
+.B /count
+Display the row count for the current table.
+.TP
+.BI /sample " " \fR[\fIn\fR]
+Show
+.I n
+sample rows from the table. Default is 10.
+.TP
+.BR /primary\-key ", " /primary_key
+Display the primary key columns.
+.TP
+.B /indexes
+Show all indexes on the current table.
+.TP
+.BR /foreign\-keys ", " /foreign_keys
+Display foreign key relationships (both incoming and outgoing).
+.TP
+.BI /find " " TEXT
+Search for
+.I TEXT
+in all columns of the current table.
+.TP
+.BI /backup " " \fR[\fIfile\fR]
+Backup the current table to a SQL file. When no file is specified,
+uses an auto-generated filename.
+.\"
+.SS Database Operations
+.TP
+.BI /schema " " \fR[\fIv\fR]
+Show database schema with table relationships. Use
+.B v
+for vertical output.
+.TP
+.B /charset
+Display character set and collation information.
+.TP
+.B /engines
+List available MySQL storage engines.
+.\"
+.SS Administration Commands
+.TP
+.B /whoami
+Display the current MySQL user and their privileges.
+.TP
+.BI /whois " " \fR[\fIuser\fR]
+Show detailed information about a specific MySQL user.
+.TP
+.B /users
+List all MySQL users and their privileges.
+.TP
+.B /processes
+Show active MySQL processes (SHOW FULL PROCESSLIST).
+.TP
+.BI /variables " " \fR[\fIfilter\fR]
+Display MySQL system variables. Optionally filter by pattern.
+.TP
+.B /stats
+Show database or table statistics depending on context.
+.TP
+.BI /export " " \fR[\fIfile\fR] " " \fR[\fIoptions\fR]
+Export query results to a file. See
+.B EXPORT OPTIONS
+below.
+.TP
+.BI /sql " " QUERY
+Execute arbitrary SQL query.
+.TP
+.B /prompt
+Open a native MySQL prompt session (returns to dbh on exit).
+.\"
+.SS Configuration Commands
+.TP
+.B /config show
+Display current configuration settings.
+.TP
+.B /config create
+Create a default configuration file at
+.IR ~/.config/dbh/config .
+.TP
+.B /config edit
+Open the configuration file in your text editor.
+.TP
+.B /config reload
+Reload configuration from file.
+.\"
+.SS History Commands
+.TP
+.BI /history " " \fR[\fIn\fR]
+Show the last
+.I n
+commands from history. Default shows all.
+.TP
+.BI ! n
+Recall and execute command number
+.I n
+from history.
+.TP
+.B Arrow keys
+Use Up/Down arrows to navigate command history.
+.\"
+.SS Shell Commands
+.TP
+.B !
+Launch an interactive shell session. Type
+.B exit
+to return to dbh.
+.TP
+.BI ! command
+Execute a shell command and return to dbh.
+.TP
+.BI !shell " " command
+Alternative syntax for executing shell commands.
+.\"
+.SH EXPORT OPTIONS
+The
+.B /export
+command supports these options:
+.TP
+.BI \-\-format " " csv | sql | json
+Output format. Default is
+.BR csv .
+.TP
+.B \-\-no\-headers
+Omit column headers from CSV output.
+.TP
+.BI \-\-delimiter " " CHAR
+Use custom delimiter for CSV output. Use
+.B tab
+or
+.B \et
+for tab-delimited.
+.PP
+Example:
+.RS
+.nf
+/export data.csv --format csv --delimiter ";"
+/export backup.sql --format sql
+/export data.json --format json
+.fi
+.RE
+.\"
+.SH CONFIGURATION
+Configuration is stored in
+.IR ~/.config/dbh/config .
+.PP
+Supported settings:
+.TP
+.B DEFAULT_PROFILE
+Path to MySQL configuration file.
+.TP
+.B DEFAULT_DATABASE
+Initial database to connect to (if not specified on command line).
+.TP
+.B DEFAULT_LIMIT
+Default LIMIT for SELECT queries. Default is 100.
+.TP
+.B MAX_HISTORY
+Maximum number of history entries to store.
+.TP
+.B PAGER
+Custom pager program for large outputs.
+.PP
+Example configuration:
+.RS
+.nf
+# dbh configuration
+DEFAULT_PROFILE=/home/user/.mylocalhost.cnf
+DEFAULT_DATABASE=myapp
+DEFAULT_LIMIT=50
+MAX_HISTORY=2000
+PAGER=less -RS
+.fi
+.RE
+.\"
+.SH FILES
+.TP
+.I ~/.mylocalhost.cnf
+Default MySQL profile (connection credentials).
+.TP
+.I ~/.config/dbh/config
+User configuration file.
+.TP
+.I ~/.config/dbh/history
+Persistent command history (slash and bang commands).
+.TP
+.I ~/.config/dbh/readline_history
+Readline history for arrow key navigation.
+.\"
+.SH ENVIRONMENT
+.TP
+.B EDITOR
+Editor used for
+.BR "/config edit" .
+Falls back to
+.B vi
+if not set.
+.TP
+.B SHELL
+Shell used for
+.B !
+commands. Falls back to
+.BR /bin/bash .
+.TP
+.B PAGER
+Pager for large outputs. Default is
+.BR less .
+.TP
+.B LESS
+Options passed to less. dbh sets this to
+.B \-FXRS
+for optimal display.
+.TP
+.B TMPDIR
+Directory for temporary files. Falls back to
+.BR /tmp .
+.\"
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+General error.
+.TP
+.B 2
+Invalid argument or usage error.
+.TP
+.B 3
+MySQL connection or execution error.
+.\"
+.SH EXAMPLES
+.TP
+.B Basic invocation:
+.nf
+dbh
+.fi
+Start dbh and navigate interactively.
+.TP
+.B Connect to a specific database:
+.nf
+dbh myapp
+.fi
+.TP
+.B Connect to database and table:
+.nf
+dbh myapp users
+.fi
+.TP
+.B Execute command directly:
+.nf
+dbh myapp users "/count"
+.fi
+.TP
+.B Use custom MySQL profile:
+.nf
+dbh -p ~/.mysql/production.cnf myapp
+.fi
+.TP
+.B Query building workflow:
+.nf
+/database myapp
+/table users
+/columns id,name,email
+/where status='active'
+/order created_at
+/desc
+/limit 20
+/select
+.fi
+.TP
+.B Export data:
+.nf
+/database myapp
+/table orders
+/where date > '2024-01-01'
+/export orders_2024.csv --format csv
+.fi
+.TP
+.B Explore schema:
+.nf
+/database myapp
+/schema
+/table users
+/foreign-keys
+/indexes
+.fi
+.\"
+.SH SECURITY
+.B dbh
+implements several security measures:
+.IP \(bu 3
+.B SQL Injection Prevention:
+All user-provided identifiers (table names, column names) are quoted using
+.BR quote_ident() .
+All user-provided values are escaped using
+.BR escape_sql_value() .
+.IP \(bu 3
+.B Secure Temporary Files:
+Temporary files are created with 0600 permissions using
+.BR create_secure_tempfile() .
+.IP \(bu 3
+.B Command Overrides:
+System commands
+.BR grep ,
+.BR find ,
+and
+.B sed
+are aliased to absolute paths to prevent command injection via PATH manipulation.
+.IP \(bu 3
+.B History File Permissions:
+History files are created with restrictive permissions.
+.PP
+Despite these protections, exercise caution when executing SQL from untrusted sources.
+.\"
+.SH BUGS
+Report bugs at:
+.I https://github.com/Open-Technology-Foundation/dbh/issues
+.\"
+.SH SEE ALSO
+.BR mysql (1),
+.BR mysqldump (1),
+.BR less (1)
+.\"
+.SH AUTHORS
+.B dbh
+was written by the Open Technology Foundation.
+.\"
+.SH COPYRIGHT
+Copyright \(co 2023-2025 Open Technology Foundation.
+.PP
+License: GNU General Public License v3.0 (GPL-3.0).
+.PP
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+.\"
+.\" #fin
